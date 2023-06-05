@@ -549,7 +549,7 @@ write_tcga_vcf <- function(
   header_lines <- c(
     "##fileformat=VCFv4.2",
     paste0("##SOURCE_TCGA=",tcga_release),
-    "##INFO=<ID=TCGA_SAMPLES,Number=.,Type=String,Description=\"TCGA barcodes\">",
+    "##INFO=<ID=TCGA_SAMPLES,Number=.,Type=String,Description=\"TCGA samples with mutation. Format: <sample_barcode>:<t_depth><t_ref_count><t_alt_count><n_depth>\">",
     "##INFO=<ID=TCGA_PANCANCER_COUNT,Number=1,Type=Integer,Description=\"Raw variant count across all tumor types\">",
     "##INFO=<ID=TCGA_FREQUENCY,Number=.,Type=String,Description=\"Frequency of variant across TCGA cancer subtypes. Format: subtype|percent affected|affected cases|total cases\">",
     "##INFO=<ID=TCGA_DRIVER_MUTATION,Number=.,Type=String,Description=\"Putative cancer driver mutation discovered by multiple approaches (Bailey et al., Cell, 2018). Format: symbol:hgvsp:ensembl_transcript_ids:discovery_approaches\">",
@@ -572,10 +572,17 @@ write_tcga_vcf <- function(
   tcga_samples_per_var <-
     as.data.frame(
       tcga_calls |>
+        dplyr::mutate(
+          tumor_sample_barcode_af_count =
+            paste(
+              tumor_sample_barcode, t_depth, t_ref_count,
+              t_alt_count, n_depth, sep = ":"
+            )
+        ) |>
         dplyr::group_by(
           CHROM, POS, REF, ALT) |>
         dplyr::summarise(TCGA_SAMPLES = paste(
-          tumor_sample_barcode,collapse=","),
+          tumor_sample_barcode_af_count,collapse=","),
           .groups = "drop") |>
         dplyr::ungroup()
     )
