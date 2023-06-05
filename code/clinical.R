@@ -75,7 +75,9 @@ get_tcga_clinical <- function(
                           PR_status = pr_status_by_ihc)
 
         )
-        clinical <- clinical |> dplyr::left_join(brca_er_pr_her2_status)
+        clinical <- clinical |>
+          dplyr::left_join(brca_er_pr_her2_status,
+                           relationship = "many-to-many")
       }else{
         clinical$ER_status <- as.character(NA)
         clinical$PR_status <- as.character(NA)
@@ -90,7 +92,9 @@ get_tcga_clinical <- function(
           gleason_score) |>
           dplyr::filter(startsWith(bcr_patient_barcode,"TCGA-")) |>
           dplyr::mutate(Gleason_score = as.integer(gleason_score))
-        clinical <- clinical |> dplyr::left_join(prad_gleason)
+        clinical <- clinical |>
+          dplyr::left_join(prad_gleason,
+                           relationship = "many-to-many")
 
       }else{
         clinical$Gleason_score <- as.integer(NA)
@@ -102,17 +106,19 @@ get_tcga_clinical <- function(
        project_code == 'TCGA-COAD' | project_code == 'TCGA-UCEC') {
         query <- TCGAbiolinks::GDCquery(
           project = project_code,
-          data.category = "Other",
-          legacy = TRUE,
+          data.category = "Biospecimen",
+          data.type = "Biospecimen Supplement",
+          data.format = "BCR XML",
           access = "open")
         TCGAbiolinks::GDCdownload(query)
-        msi_assay_results <- TCGAbiolinks::GDCprepare_clinic(query, "msi")
+        msi_assay_results <- TCGAbiolinks::GDCprepare_clinic(
+          query, clinical.info = "aliquot")
         msi_assay_results <- msi_assay_results |>
           dplyr::select(
             bcr_patient_barcode,
-            mononucleotide_and_dinucleotide_marker_panel_analysis_status) |>
+            msi_mono_di_nucleotide_assay_status) |>
           dplyr::rename(
-            MSI_status = mononucleotide_and_dinucleotide_marker_panel_analysis_status) |>
+            MSI_status = msi_mono_di_nucleotide_assay_status) |>
           dplyr::mutate(MSI_status = as.character(MSI_status)) |>
           dplyr::filter(MSI_status != 'Indeterminate' &
                           !is.na(MSI_status)) |>
@@ -126,7 +132,9 @@ get_tcga_clinical <- function(
             'MSI.L',as.character(MSI_status)
           ))
 
-      clinical <- clinical |> dplyr::left_join(msi_assay_results)
+      clinical <- clinical |>
+        dplyr::left_join(msi_assay_results,
+                         relationship = "many-to-many")
     }else{
       clinical$MSI_status <- as.character(NA)
     }
@@ -153,7 +161,7 @@ get_tcga_clinical <- function(
   ## Join uniform clinical annotations with
   ## subtype information, set primary tumor site
   tcga_clinical_final <- tcga_clinical |>
-    dplyr::left_join(tcga_pancan_subtypes) |>
+    dplyr::left_join(tcga_pancan_subtypes, relationship = "many-to-many") |>
     dplyr::mutate(primary_site = "Other/Unknown") |>
     ## Simplify primary sites/tissue
     dplyr::mutate(primary_site = dplyr::if_else(
@@ -398,10 +406,11 @@ get_tcga_clinical <- function(
     dplyr::left_join(
       dplyr::select(
         tcga_clinical_counts, tumor, primary_diagnosis, primary_site,
-        primary_diagnosis_simplified, primary_diagnosis_very_simplified)) |>
+        primary_diagnosis_simplified, primary_diagnosis_very_simplified),
+      relationship = "many-to-many") |>
     dplyr::filter(tumor != 'PCPG' |
                     (tumor == 'PCPG' & primary_site != 'Other/Unknown')) |>
-    dplyr::left_join(tissue_subtype_codes) |>
+    dplyr::left_join(tissue_subtype_codes, relationship = "many-to-many") |>
     dplyr::rename(site_diagnosis_code = tissue_code_2) |>
     dplyr::rename(icd10_code = icd_10_code) |>
     dplyr::mutate(tumor_stage = ajcc_pathologic_stage) |>

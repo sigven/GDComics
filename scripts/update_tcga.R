@@ -16,19 +16,21 @@ library(RTCGAToolbox)
 
 remotes::install_github('sigven/geneOncoX')
 remotes::install_github('sigven/cancerHotspots')
+remotes::install_github('sigven/vcfHelpR')
 
 ## GDC omics data retrieval scripts
 source('code/utils.R')
 source('code/clinical.R')
 source('code/mutation.R')
 source('code/msi.R')
+source('code/cna.R')
 source('code/rnaseq.R')
 
 msi_report_template_rmarkdown <-
-  'code/msi_classifier.Rmd'
+  file.path(here::here(),"code","msi_classifier.Rmd")
 
-tcga_release <- "release36_20221212"
-gdc_release <- "GDC Data Release 36.0, December 12, 2022"
+tcga_release <- "release37_20230329"
+gdc_release <- "GDC Data Release 37.0, March 29th, 2023"
 
 gdc_projects <- get_gdc_projects()
 
@@ -132,7 +134,7 @@ gene_mutation_stats <- calculate_gene_mutation_rate(
 
 #####--- MSI classifier -----#####
 
-## NOTE!! For some reason (not yeat clear), the output object
+## NOTE!! For some reason (not yet clear), the output object
 ## for the msi classifier ('msi_classifier.rds') gets immensely huge
 ## when running the function from here. When sourcing the internal code
 ## of the function, the output object size gets as expected

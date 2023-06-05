@@ -7,6 +7,7 @@ get_tcga_snv <- function(
     data_raw_dir = NA,
     overwrite = FALSE,
     gOncoX = NA,
+    gdc_files_per_chunk = 50,
     output_dir = NA){
 
   tcga_full_rds <-
@@ -21,7 +22,6 @@ get_tcga_snv <- function(
     tcga_snv_calls <- readRDS(file = tcga_full_rds)
     return(tcga_snv_calls)
   }
-
 
   tcga_driver_mutations <- get_tcga_driver_mutations(
     data_raw_dir = data_raw_dir
@@ -111,7 +111,6 @@ get_tcga_snv <- function(
         project = project_code,
         data.category = "Simple Nucleotide Variation",
         access = "open",
-        legacy = FALSE,
         data.type = "Masked Somatic Mutation",
         workflow.type =
           "Aliquot Ensemble Somatic Variant Merging and Masking"
@@ -121,7 +120,7 @@ get_tcga_snv <- function(
         query,
         directory = "GDCdata",
         method = "api",
-        files.per.chunk = 100)
+        files.per.chunk = gdc_files_per_chunk)
 
       raw_maf <- as.data.frame(
         TCGAbiolinks::GDCprepare(query, directory = "GDCdata")) |>
@@ -323,7 +322,8 @@ get_tcga_snv <- function(
                         primary_site,
                         primary_diagnosis,
                         primary_diagnosis_very_simplified),
-          by = "bcr_patient_barcode") |>
+          by = "bcr_patient_barcode",
+          relationship = "many-to-many") |>
         dplyr::distinct() |>
         dplyr::mutate(
           REF = as.character(REF),
@@ -361,7 +361,8 @@ get_tcga_snv <- function(
                  'windowmaskerSdust')){
 
         hits <- GenomicRanges::findOverlaps(
-          gr_calls, repeat_tracks[[e]], type = "any", select = "all")
+          gr_calls, repeat_tracks[[e]],
+          type = "any", select = "all")
 
         var_hits <-
           unique(S4Vectors::queryHits(hits))
@@ -456,30 +457,28 @@ get_tcga_snv <- function(
     file = tcga_full_rds
   )
 
-  write.table(
+  readr::write_tsv(
     tcga_calls,
     file =
       file.path(
         output_dir,
         tcga_release,
         "snv_indel",
-        "tcga_mutation_grch38.tsv"
-      ),
-    col.names = T, row.names = F,
-    quote = F, sep = "\t"
+        "tcga_mutation_grch38.tsv.gz"
+      )
   )
 
-  system(
-    paste0(
-      'gzip -f ',
-      file.path(
-        output_dir,
-        tcga_release,
-        "snv_indel",
-        "tcga_mutation_grch38.tsv"
-      )
-    )
-  )
+  # system(
+  #   paste0(
+  #     'gzip -f ',
+  #     file.path(
+  #       output_dir,
+  #       tcga_release,
+  #       "snv_indel",
+  #       "tcga_mutation_grch38.tsv"
+  #     )
+  #   )
+  # )
 
 
   ## Create MAF files per TCGA cohort
@@ -798,6 +797,16 @@ calculate_sample_tmb <- function(
       tcga_release,
       "tmb",
       "tcga_tmb.rds"
+    )
+  )
+
+  readr::write_tsv(
+    tcga_tmb,
+    file = file.path(
+      output_dir,
+      tcga_release,
+      "tmb",
+      "tcga_tmb.tsv.gz"
     )
   )
 

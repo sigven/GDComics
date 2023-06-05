@@ -16,6 +16,20 @@ get_cna_calls <- function(
   clear_cache = T,
   output_dir = NA){
 
+
+  if(!dir.exists(
+    file.path(output_dir, tcga_release))){
+    dir.create(
+      file.path(output_dir, tcga_release))
+  }
+
+  if(!dir.exists(
+    file.path(
+      output_dir, tcga_release, "cna"))){
+    dir.create(
+      file.path(output_dir, tcga_release, "cna"))
+  }
+
   k <- 0
   all_cna_calls <- data.frame()
 
@@ -156,6 +170,7 @@ get_cna_calls <- function(
               TRUE ~ as.character(cna_code))
             )
           cna_calls <- cna_calls |>
+            dplyr::filter(cna_code != "0") |>
             #dplyr::filter(mut_status == "HOMDEL" | mut_status == "AMPL") |>
             dplyr::mutate(tumor = t) |>
             dplyr::filter(!is.na(entrezgene)) |>
@@ -164,10 +179,19 @@ get_cna_calls <- function(
         cna_df[[e]] <- cna_calls
       }
 
-      tmp <- cna_df$all |>
-        dplyr::select(tumor_sample_barcode,
-                      cna_code, entrezgene, bcr_patient_barcode) |>
-        dplyr::rename(cna_signal_raw = cna_code)
+      tmp <- as.data.frame(
+        cna_df$all |>
+          dplyr::select(tumor_sample_barcode,
+                        cna_code, entrezgene,
+                        bcr_patient_barcode) |>
+          dplyr::rename(cna_signal_raw = cna_code) |>
+          dplyr::group_by(
+            dplyr::across(c(-cna_signal_raw))) |>
+          dplyr::summarise(
+            cna_signal_raw = max(as.numeric(cna_signal_raw)),
+            .groups = "drop")
+      )
+
       #cna_calls <- cna_df
 
       cna_calls_final <- cna_df$thresholded |>
@@ -175,12 +199,13 @@ get_cna_calls <- function(
           tmp,
           by = c("entrezgene",
                  "tumor_sample_barcode",
-                 "bcr_patient_barcode")) |>
+                 "bcr_patient_barcode"),
+          relationship = "many-to-many") |>
         dplyr::left_join(
           dplyr::select(tcga_clinical_info$slim, bcr_patient_barcode,
                         primary_site, primary_diagnosis,
                         primary_diagnosis_very_simplified),
-          by = "bcr_patient_barcode") |>
+          by = "bcr_patient_barcode", relationship = "many-to-many") |>
         dplyr::select(
           bcr_patient_barcode,
           tumor_sample_barcode,
@@ -230,6 +255,16 @@ get_cna_calls <- function(
       tcga_release,
       "cna",
       "tcga_cna_gistic2.ampl_homdel.rds"
+    )
+  )
+
+  readr::write_tsv(
+    tcga_cna,
+    file = file.path(
+      output_dir,
+      tcga_release,
+      "cna",
+      "tcga_cna_gistic2.ampl_homdel.tsv.gz"
     )
   )
 

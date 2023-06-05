@@ -1,7 +1,5 @@
 library(reshape2)
 
-tcga_release <- 'release36_20221212'
-
 get_gdc_projects <- function(tcga = TRUE){
   gdc_projects <- as.data.frame(TCGAbiolinks::getGDCprojects())
 
@@ -1602,7 +1600,8 @@ map_cancer_hotspots <- function(
         MUTATION_HOTSPOT2,
         MUTATION_HOTSPOT_CANCERTYPE),
       by = c("Entrez_Gene_Id" = "entrezgene",
-             "tmp_hgvsp" = "hgvsp")
+             "tmp_hgvsp" = "hgvsp"),
+      relationship = "many-to-many"
     )
 
   mapped_hotspot_mutations[['by_mutation']] <-
@@ -1672,12 +1671,13 @@ map_cancer_hotspots <- function(
       dplyr::rename(entrezgene = Entrez_Gene_Id) |>
       dplyr::left_join(
         dplyr::select(
-          cancer_hotspots$wide,
+          cancerHotspots::cancer_hotspots$wide,
           codon, entrezgene,
           MUTATION_HOTSPOT,
           MUTATION_HOTSPOT2,
           MUTATION_HOTSPOT_CANCERTYPE),
-        by = c("codon","entrezgene")) |>
+        by = c("codon","entrezgene"),
+        relationship = "many-to-many") |>
       dplyr::filter(!is.na(MUTATION_HOTSPOT)) |>
       dplyr::select(-c(tmp_hgvsp, codon)) |>
       dplyr::distinct() |>
@@ -1753,16 +1753,33 @@ map_cancer_hotspots <- function(
                     End_Position,
                     Reference_Allele,
                     Tumor_Seq_Allele2) |>
-    dplyr::summarise(n = dplyr::n())
+    dplyr::summarise(n = dplyr::n(),
+                     .groups = "drop")
 
   principal_dup_hotspots <- num_hotspots_per_variant |>
     dplyr::filter(n > 1) |>
-    dplyr::inner_join(hotspot_map) |>
+    dplyr::inner_join(
+      hotspot_map,
+      by = c("tumor_sample_barcode",
+             "Chromosome",
+             "Start_Position",
+             "End_Position",
+             "Reference_Allele",
+             "Tumor_Seq_Allele2"),
+      relationship = "many-to-many") |>
     dplyr::filter(principal_hgvsp == T)
 
   other_hotspots <- num_hotspots_per_variant |>
     dplyr::filter(n == 1) |>
-    dplyr::inner_join(hotspot_map)
+    dplyr::inner_join(
+      hotspot_map,
+      by = c("tumor_sample_barcode",
+             "Chromosome",
+             "Start_Position",
+             "End_Position",
+             "Reference_Allele",
+             "Tumor_Seq_Allele2"),
+      relationship = "many-to-many")
 
   hotspot_map_nonredundant <-
     dplyr::bind_rows(
@@ -1770,8 +1787,6 @@ map_cancer_hotspots <- function(
       other_hotspots
     ) |>
     dplyr::select(-principal_hgvsp)
-
-
 
   if(NROW(hotspot_map_nonredundant) > 0){
     raw_maf <- raw_maf |>
@@ -1786,7 +1801,7 @@ map_cancer_hotspots <- function(
           "Tumor_Seq_Allele2",
           "tumor_sample_barcode",
           "Entrez_Gene_Id"
-        ))
+        ), relationship = "many-to-many")
   }else{
     raw_maf <- raw_maf |>
       dplyr::mutate(

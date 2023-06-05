@@ -8,6 +8,11 @@ get_bulk_rnaseq <- function(
     gOncoX = NA,
     output_dir = NA){
 
+  if(!dir.exists(
+    file.path(output_dir, tcga_release))){
+    dir.create(
+      file.path(output_dir, tcga_release))
+  }
 
   if(!dir.exists(
     file.path(
