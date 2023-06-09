@@ -559,14 +559,14 @@ write_tcga_vcf <- function(
     "##INFO=<ID=DOCM_ID,Number=.,Type=String,Description=\"DoCM variant identifier (HGVS)\">",
     "##INFO=<ID=DOCM_PMID,Number=.,Type=String,Description=\"PubMed IDs supporting variant-disease association in DoCM database\">")
 
-  write(
-    header_lines,
-    file = file.path(
-      output_dir,
-      tcga_release,
-      "vcf",
-      "tcga.grch38.vcf"
-    ), sep = "\n")
+  # write(
+  #   header_lines,
+  #   file = file.path(
+  #     output_dir,
+  #     tcga_release,
+  #     "vcf",
+  #     "tcga.grch38.vcf"
+  #   ), sep = "\n")
 
 
   tcga_samples_per_var <-
@@ -630,6 +630,9 @@ write_tcga_vcf <- function(
       dplyr::mutate(INFO = stringr::str_replace(
         INFO, ";DOCM_PMID=NA","")) |>
       dplyr::mutate(INFO = stringr::str_replace(
+        INFO, ";;", ";"
+      )) |>
+      dplyr::mutate(INFO = stringr::str_replace(
         INFO, ";{1,}$", ""
       )) |>
       dplyr::select(
@@ -638,7 +641,7 @@ write_tcga_vcf <- function(
       dplyr::distinct()
   )
 
-  ## Write to VCF (temporary)
+  ## Write to VCF
   vcfhelpR::write_vcf_records(
     vcf_records = tcga_vcf_records,
     output_dir =

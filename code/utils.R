@@ -1267,6 +1267,12 @@ get_curated_docm_mutations <- function(
         dplyr::select(
           disease, pmid, docm_id,
           chrom, pos, ref, alt) |>
+        dplyr::mutate(docm_id = stringr::str_replace_all(
+          docm_id, "\\*","X"
+        )) |>
+        dplyr::mutate(docm_id = stringr::str_replace_all(
+          docm_id, ">","_"
+        )) |>
         dplyr::mutate(
           ref = as.character(ref),
           alt = as.character(alt)) |>
