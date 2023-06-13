@@ -559,16 +559,6 @@ write_tcga_vcf <- function(
     "##INFO=<ID=DOCM_ID,Number=.,Type=String,Description=\"DoCM variant identifier (HGVS)\">",
     "##INFO=<ID=DOCM_PMID,Number=.,Type=String,Description=\"PubMed IDs supporting variant-disease association in DoCM database\">")
 
-  # write(
-  #   header_lines,
-  #   file = file.path(
-  #     output_dir,
-  #     tcga_release,
-  #     "vcf",
-  #     "tcga.grch38.vcf"
-  #   ), sep = "\n")
-
-
   tcga_samples_per_var <-
     as.data.frame(
       tcga_calls |>
@@ -681,6 +671,137 @@ write_tcga_vcf <- function(
           "vcf",
           "tcga.vcfanno.vcf_info_tags.txt"
         ), sep = "\n")
+
+
+  merged_variant_annotations <-
+    tcga_calls |>
+    dplyr::filter(CODING_STATUS == "coding") |>
+    dplyr::group_by(
+      CHROM, POS, REF, ALT
+    ) |>
+    dplyr::summarise(
+      One_Consequence = paste(
+        unique(One_Consequence), collapse = ","
+      ),
+      Hugo_Symbol = paste(
+        unique(Hugo_Symbol), collapse = ","
+      ),
+      Gene = paste(
+        unique(Gene), collapse = ","
+      ),
+      Feature = paste(
+        unique(Feature), collapse = ","
+      ),
+      HGVSc = paste(
+        unique(HGVSc), collapse = ","
+      ),
+      MUTATION_HOTSPOT2 = paste(
+        unique(MUTATION_HOTSPOT2), collapse = ","
+      ),
+      MUTATION_HOTSPOT_MATCH = paste(
+        unique(MUTATION_HOTSPOT_MATCH), collapse = ","
+      ),
+      HGVSp_Short = paste(
+        unique(HGVSp_Short), collapse = ","
+      ),
+      .groups = "drop"
+    )
+
+  site_calls <- as.data.frame(
+    tcga_calls |>
+      dplyr::filter(CODING_STATUS == "coding") |>
+      dplyr::mutate(primary_site = stringr::str_replace_all(
+        primary_site,"/| ","_")
+      ) |>
+      dplyr::select(primary_site, tumor_sample_barcode,
+                    CHROM, POS, REF, ALT, GENOMIC_CHANGE) |>
+      dplyr::distinct() |>
+      dplyr::group_by(
+        CHROM, POS, REF, ALT, GENOMIC_CHANGE, primary_site) |>
+      dplyr::summarise(
+        site_freq = dplyr::n(),
+        site_samples = paste(
+          tumor_sample_barcode, collapse="|"),
+        .groups = "drop") |>
+      dplyr::left_join(
+        merged_variant_annotations,
+        by = c("CHROM", "POS", "REF", "ALT")
+      )
+  )
+
+  recurrent_variants <- site_calls |>
+    dplyr::group_by(GENOMIC_CHANGE) |>
+    dplyr::summarise(n_total = sum(site_freq), .groups = "drop") |>
+    dplyr::filter(n_total > 1)
+
+  tcga_recurrent_coding_vcf <- as.data.frame(
+    site_calls |>
+      dplyr::inner_join(recurrent_variants) |>
+      dplyr::mutate(TCGA_SYMBOL = Hugo_Symbol) |>
+      dplyr::mutate(TCGA_TRANSCRIPT_ID = Feature) |>
+      dplyr::mutate(TCGA_HGVSp = HGVSp_Short) |>
+      dplyr::mutate(TCGA_MUTATION_HOTSPOT = MUTATION_HOTSPOT2) |>
+      dplyr::mutate(TCGA_MUTATION_HOTSPOT_MATCH = MUTATION_HOTSPOT_MATCH) |>
+      dplyr::mutate(TCGA_CONSEQUENCE = One_Consequence) |>
+      dplyr::mutate(TCGA_TOTAL_RECURRENCE = n_total) |>
+      dplyr::mutate(TCGA_SITE_RECURRENCE = paste0(
+        primary_site, ":",
+        site_freq, ":",
+        site_samples)) |>
+      dplyr::group_by(
+        CHROM, POS, REF, ALT,
+        TCGA_SYMBOL, TCGA_TRANSCRIPT_ID,
+        TCGA_MUTATION_HOTSPOT,
+        TCGA_MUTATION_HOTSPOT_MATCH,
+        TCGA_HGVSp, TCGA_CONSEQUENCE,
+        TCGA_TOTAL_RECURRENCE) |>
+      dplyr::summarise(TCGA_SITE_RECURRENCE = paste(
+        TCGA_SITE_RECURRENCE, collapse=","),
+        .groups = "drop"
+      ) |>
+      dplyr::mutate(INFO = paste0(
+        "TCGA_SITE_RECURRENCE=",
+        TCGA_SITE_RECURRENCE,
+        ";TCGA_TOTAL_RECURRENCE=",
+        TCGA_TOTAL_RECURRENCE,
+        ";TCGA_SYMBOL=",
+        TCGA_SYMBOL,
+        ";TCGA_MUTATION_HOTSPOT=",
+        TCGA_MUTATION_HOTSPOT,
+        ";TCGA_MUTATION_HOTSPOT_MATCH=",
+        TCGA_MUTATION_HOTSPOT_MATCH,
+        ";TCGA_TRANSCRIPT_ID=",
+        TCGA_TRANSCRIPT_ID,
+        ";TCGA_HGVSp=",
+        TCGA_HGVSp,
+        ";TCGA_CONSEQUENCE=",
+        TCGA_CONSEQUENCE)) |>
+      dplyr::mutate(FILTER = "PASS", QUAL = ".", ID = ".") |>
+      dplyr::select(CHROM, POS, ID, REF,
+                    ALT, QUAL, FILTER, INFO) |>
+      dplyr::distinct()
+  )
+
+  header_lines_recurrent <-
+    c("##fileformat=VCFv4.2",
+      paste0("##SOURCE_TCGA=",tcga_release),
+      "##INFO=<ID=TCGA_SITE_RECURRENCE,Number=.,Type=String,Description=\"Variant frequency across primary tumor sites. Format: <Site>:<Frequency>:<Tumor_Sample_Barcodes>\">",
+      "##INFO=<ID=TCGA_TOTAL_RECURRENCE,Number=1,Type=Integer,Description=\"Total variant frequency across all tumor types\">",
+      "##INFO=<ID=TCGA_SYMBOL,Number=.,Type=String,Description=\"Gene symbol\">",
+      "##INFO=<ID=TCGA_MUTATION_HOTSPOT,Number=.,Type=String,Description=\"Mutational hotspot in cancer\">",
+      "##INFO=<ID=TCGA_MUTATION_HOTSPOT_MATCH,Number=.,Type=String,Description=\"Mutational hotspot match (mutation/codon)\">",
+      "##INFO=<ID=TCGA_TRANSCRIPT_ID,Number=.,Type=String,Description=\"Ensembl transcript identifier\">",
+      "##INFO=<ID=TCGA_HGVSp,Number=.,Type=String,Description=\"Protein variant consequence\">",
+      "##INFO=<ID=TCGA_CONSEQUENCE,Number=.,Type=String,Description=\"Variant consequence\">")
+
+  vcfhelpR::write_vcf_records(
+    vcf_records = tcga_recurrent_coding_vcf,
+    output_dir = file.path(
+      "output", tcga_release, "vcf"),
+    vcf_fname_prefix = "tcga_recurrent_coding",
+    genome_build = "grch38",
+    header_lines = header_lines_recurrent
+  )
 
 }
 
