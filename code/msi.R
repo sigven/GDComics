@@ -1,13 +1,63 @@
-library(BSgenome.Hsapiens.UCSC.hg38)
-library(BSgenome.Hsapiens.UCSC.hg19)
-library(caret)
+#library(BSgenome.Hsapiens.UCSC.hg38)
+#library(BSgenome.Hsapiens.UCSC.hg19)
+#library(caret)
+
+#' GDC MSI data for TCGA samples (mono/dinucleotide assay-based)
+#'
+#' @param output_dir Output directory for processed data
+#' @param gdc_release GDC data release version
+#' @param data_raw_dir Data raw directory
+#' @param overwrite Overwrite existing data
+#' @return Data frame with MSI data
+#'
+#' @export
+gdc_tcga_msi <- function(
+  output_dir = NULL,
+  gdc_release = "release45_20251204",
+  data_raw_dir = NULL,
+  overwrite = F){
+
+
+  output_fname <-
+    file.path(
+      output_dir,
+      gdc_release,
+      "msi",
+      "tcga_msi.rds"
+    )
+
+  if(file.exists(output_fname) & overwrite == F){
+    msi_data <- readRDS(file = output_fname)
+    return(msi_data)
+  }
+
+  gdc_biospecimen_cache_path <-
+    file.path(
+      data_raw_dir,
+      "GDCdata",
+      "biospecimen"
+    )
+
+  msi_calls <-
+    get_msi_status(
+      gdc_biospecimen_cache_path = gdc_biospecimen_cache_path
+    )
+
+  saveRDS(
+    msi_calls,
+    file = output_fname
+  )
+
+  return(msi_calls)
+
+}
 
 plot_frac_winMaskIndels <- function(df){
   p <-
     ggplot2::ggplot(data = df) +
     ggplot2::geom_boxplot(mapping = ggplot2::aes(
-      x = MSI_status, y = fracWinMaskIndels,
-      color = MSI_status, fill = MSI_status)) +
+      x = msi_status, y = fracWinMaskIndels,
+      color = msi_status, fill = msi_status)) +
     ggplot2::facet_grid(. ~ tumor) +
     ggplot2::scale_color_brewer(palette='Dark2') +
     ggplot2::scale_fill_brewer(palette='Dark2') +
@@ -33,7 +83,7 @@ plot_frac_Indels <- function(df){
   p <-
     ggplot2::ggplot(data = df) +
     ggplot2::geom_histogram(mapping = ggplot2::aes(
-      x = fracIndels, color = MSI_status, fill = MSI_status),
+      x = fracIndels, color = msi_status, fill = msi_status),
       position = "dodge", binwidth = 0.01)+
     ggplot2::facet_grid(tumor ~ .) +
     ggplot2::scale_color_brewer(palette='Dark2') +
@@ -65,7 +115,7 @@ plot_msi_gene_enrichment <- function(df, g = 'MLH1'){
 
   tmp2 <- as.data.frame(
     dplyr::filter(tmp, !is.na(gene_status)) |>
-      dplyr::group_by(gene_status, MSI_status) |>
+      dplyr::group_by(gene_status, msi_status) |>
       dplyr::summarise(n = dplyr::n(),
                        .groups = "drop"))
   tmp3 <- as.data.frame(
@@ -77,18 +127,18 @@ plot_msi_gene_enrichment <- function(df, g = 'MLH1'){
   tmp2$fractionMutated <- tmp2$n / tmp2$n_all
 
   tmp_msi.h <- log2(
-    tmp2[tmp2$MSI_status == "MSI.H" & tmp2$gene_status == "gene_mutated",]$fractionMutated /
-      tmp2[tmp2$MSI_status == "MSI.H" & tmp2$gene_status == "not_mutated",]$fractionMutated)
+    tmp2[tmp2$msi_status == "MSI-H" & tmp2$gene_status == "gene_mutated",]$fractionMutated /
+      tmp2[tmp2$msi_status == "MSI-H" & tmp2$gene_status == "not_mutated",]$fractionMutated)
   tmp_mss <- log2(
-    tmp2[tmp2$MSI_status == "MSS" & tmp2$gene_status == "gene_mutated",]$fractionMutated /
-      tmp2[tmp2$MSI_status == "MSS" & tmp2$gene_status == "not_mutated",]$fractionMutated)
+    tmp2[tmp2$msi_status == "MSS" & tmp2$gene_status == "gene_mutated",]$fractionMutated /
+      tmp2[tmp2$msi_status == "MSS" & tmp2$gene_status == "not_mutated",]$fractionMutated)
 
-  result <- data.frame('MSI_status' = 'MSI.H','enrichment' = tmp_msi.h)
-  result <- rbind(result, data.frame('MSI_status' = 'MSS', 'enrichment' = tmp_mss))
+  result <- data.frame('msi_status' = 'MSI-H','enrichment' = tmp_msi.h)
+  result <- rbind(result, data.frame('msi_status' = 'MSS', 'enrichment' = tmp_mss))
 
   p1 <- ggplot2::ggplot(result) +
     ggplot2::geom_bar(mapping = ggplot2::aes(
-      x = MSI_status, y = enrichment, fill = MSI_status),
+      x = msi_status, y = enrichment, fill = msi_status),
       colour = "black", stat = "identity",
       position = ggplot2::position_dodge(), width = 0.6) +
     ggplot2::guides(fill = "none") +
@@ -118,20 +168,20 @@ plot_mutated_msi_samples <- function(df, g = 'MLH1'){
 
   tmp2 <- as.data.frame(
     dplyr::filter(tmp, !is.na(gene_status)) |>
-      dplyr::group_by(gene_status, MSI_status) |>
+      dplyr::group_by(gene_status, msi_status) |>
       dplyr::summarise(n = dplyr::n(),
                        .groups = "drop"))
   tmp3 <- as.data.frame(
-    dplyr::group_by(tmp, MSI_status) |>
+    dplyr::group_by(tmp, msi_status) |>
       dplyr::summarise(n_all = dplyr::n(),
                        .groups = "drop"))
   tmp2 <- dplyr::left_join(
-    tmp2, tmp3, by = "MSI_status")
+    tmp2, tmp3, by = "msi_status")
   tmp2$fractionMutated <- tmp2$n / tmp2$n_all
 
   p1 <- ggplot2::ggplot(tmp2) +
     ggplot2::geom_bar(mapping = ggplot2::aes(
-      x = MSI_status, y = fractionMutated, fill = MSI_status),
+      x = msi_status, y = fractionMutated, fill = msi_status),
       colour = "black", stat = "identity",
       position = ggplot2::position_dodge(), width = 0.8) +
     ggplot2::guides(fill = "none") +
@@ -152,10 +202,10 @@ plot_mutated_msi_samples <- function(df, g = 'MLH1'){
 }
 
 
-get_msi_prediction_features <- function(tcga_calls, target_size_mb = 34.0){
+get_msi_prediction_features <- function(varcalls, target_size_mb = 34.0){
 
   assertable::assert_colnames(
-    tcga_calls,
+    varcalls,
     c('SIMPLEREPEATS_HIT',
       'WINMASKER_HIT',
       'Variant_Type',
@@ -166,7 +216,7 @@ get_msi_prediction_features <- function(tcga_calls, target_size_mb = 34.0){
     only_colnames = F
   )
 
-  calls_repeatAnnotated <- tcga_calls |>
+  calls_repeatAnnotated <- varcalls |>
     dplyr::mutate(repeatStatus = dplyr::if_else(
       SIMPLEREPEATS_HIT == T,"simpleRepeat",as.character(NA))) |>
     dplyr::mutate(winMaskStatus = dplyr::if_else(
@@ -370,7 +420,7 @@ get_msi_prediction_features <- function(tcga_calls, target_size_mb = 34.0){
 
   ## initialize data frame of predictive features with all patients
   ## there is mutation data for
-  sample_msi_features <- tcga_calls |>
+  sample_msi_features <- varcalls |>
     dplyr::select(tumor_sample_barcode, tumor) |>
     dplyr::distinct() |>
     dplyr::left_join(rep_indels, by = "tumor_sample_barcode") |>
@@ -470,9 +520,8 @@ get_msi_prediction_features <- function(tcga_calls, target_size_mb = 34.0){
 
 generate_msi_classifier <- function(
     msi_report_template_rmarkdown = NA,
-    tcga_calls = NA,
-    tcga_clinical_info = NA,
-    tcga_release = NA,
+    t_depth_min = 30,
+    t_vaf_min = 0.05,
     gdc_release = NA,
     data_raw_dir = NA,
     overwrite = FALSE,
@@ -486,40 +535,122 @@ generate_msi_classifier <- function(
   }
 
   msi_classifier_fname = file.path(
-    output_dir, tcga_release, "msi", "msi_classifier.rds")
+    output_dir, tcga_release, "msi", "tcga_msi_classifier2.rds")
 
   if(file.exists(msi_classifier_fname) & overwrite == F){
     return(0)
   }
 
-  ## NOTE: MSI status provided on a per patient basis
-  msi_sample_status <- tcga_clinical_info$slim |>
-    dplyr::select(bcr_patient_barcode,
-                  MSI_status) |>
-    dplyr::filter(!is.na(MSI_status)) |>
-    dplyr::mutate(MSI_status = dplyr::if_else(
-      MSI_status == 'MSI.L','MSS',as.character(MSI_status)
-    ))
+  tcga_clinical <- gdc_tcga_clinical(
+    gdc_release = gdc_release,
+    overwrite = F,
+    output_dir = output_dir)
 
+  snv_indel_calls <- gdc_tcga_snv(
+    gdc_release = gdc_release,
+    overwrite = F,
+    output_dir = output_dir)
+
+  msi_data_goldstandard <- gdc_tcga_msi(
+    output_dir = output_dir,
+    gdc_release = gdc_release,
+    data_raw_dir = data_raw_dir,
+    overwrite = F) |>
+    dplyr::filter(
+      !is.na(.data$msi_status) &
+        .data$msi_status != "Indeterminate") |>
+    dplyr::mutate(msi_status = dplyr::if_else(
+      msi_status == 'MSI-L',
+      'MSS',
+      as.character(msi_status)
+    )) |>
+    dplyr::arrange(
+      bcr_patient_barcode,
+      tumor_sample_barcode,
+      project,
+    ) |>
+    ## keep first entry per sample/patient/project
+    dplyr::group_by(
+      dplyr::across(-c("project"))
+    ) |>
+    dplyr::slice(1) |>
+    dplyr::ungroup()
+
+  assertable::assert_colnames(
+    snv_indel_calls,
+    c('SIMPLEREPEATS_HIT',
+      'WINMASKER_HIT',
+      'Variant_Type',
+      'tumor_sample_barcode',
+      'tumor',
+      "bcr_patient_barcode",
+      "t_depth",
+      "t_alt_count",
+      'Hugo_Symbol',
+      'One_Consequence'),
+    only_colnames = F,
+    quiet = T
+  )
+
+  ## 1. Filter calls based on DP and VAF
+  ## - t_depth_min: minimum tumor depth
+  ## - t_vaf_min: minimum tumor variant allelic fraction
+  ## 2. Only keep samples for which we have gold standard MSI data
+  ## 3. Limit samples to those with a minimum of n = 50 SNV/indel
+  ##    calls after DP/AF filtering
+  snv_indel_calls_filtered <- snv_indel_calls |>
+    dplyr::mutate(
+      t_vaf = as.numeric(t_alt_count) / as.numeric(t_depth)
+    ) |>
+    dplyr::filter(
+      as.numeric(t_depth) >= t_depth_min &
+        as.numeric(t_vaf) >= t_vaf_min
+    ) |>
+    dplyr::inner_join(
+      dplyr::select(
+        msi_data_goldstandard,
+        tumor_sample_barcode
+      ), by = "tumor_sample_barcode"
+    )
+
+  sample_call_counts <- as.data.frame(
+    dplyr::group_by(
+      snv_indel_calls_filtered,
+      tumor_sample_barcode) |>
+      dplyr::summarise(
+        n_calls = dplyr::n(),
+        .groups = "drop"
+      )
+  )
+
+  snv_indel_calls_filtered <- snv_indel_calls_filtered |>
+    dplyr::inner_join(
+      dplyr::filter(
+        sample_call_counts,
+        n_calls >= 50) |>
+        dplyr::select(tumor_sample_barcode),
+      by = "tumor_sample_barcode"
+    )
+
+  msi_data_goldstandard <- msi_data_goldstandard |>
+    dplyr::filter(
+      tumor_sample_barcode %in%
+        unique(snv_indel_calls_filtered$tumor_sample_barcode)
+    )
 
   msi_data <- get_msi_prediction_features(
-    tcga_calls = tcga_calls)
+    varcalls = snv_indel_calls_filtered)
 
   msi_pred_features_response <- msi_data$msi_features |>
-    dplyr::inner_join(msi_sample_status, by = "bcr_patient_barcode") |>
-    dplyr::filter(
-      ## some patients with multiple samples, yet MSI is only provided
-      ## on a per patient basis, hence remove duplicates
-      tumor_sample_barcode != "TCGA-A6-5665-01B" &
-        tumor_sample_barcode != "TCGA-A6-2674-01B" &
-        tumor_sample_barcode != "TCGA-A6-6781-01B"
-    )
+    dplyr::inner_join(
+      msi_data_goldstandard,
+      by = c("bcr_patient_barcode",
+             "tumor_sample_barcode"))
 
   tcga_dataset <- dplyr::select(
     msi_pred_features_response,
-    tumor_sample_barcode,
     tumor,
-    MSI_status,
+    msi_status,
     fracWinMaskIndels,
     fracWinMaskSNVs,
     fracRepeatIndels,
@@ -532,14 +663,12 @@ generate_msi_classifier <- function(
 
 
   msi_predmodel_data <- tcga_dataset
-  msi_predmodel_data$tumor_sample_barcode <- NULL
 
   set.seed(9999)
-  inTrain <- caret::createDataPartition(msi_predmodel_data$MSI_status, p = 0.70)[[1]]
+  inTrain <- caret::createDataPartition(
+    msi_predmodel_data$msi_status, p = 0.70)[[1]]
   training <- msi_predmodel_data[ inTrain,]
   testing <- msi_predmodel_data[-inTrain,]
-  #set.seed(7777)
-
   training_exploration <- training
 
   msi_plots <- list()
@@ -575,58 +704,68 @@ generate_msi_classifier <- function(
   ## ten-fold cross-validation
   training <- dplyr::select(training, -tumor)
   modfit_rf <- caret::train(
-    as.factor(MSI_status) ~ ., method="rf",
-    data=training,preProcess=c("YeoJohnson","scale"),
+    as.factor(msi_status) ~ .,
+    method="rf",
+    data = training,
+    preProcess = c("YeoJohnson","scale"),
     trControl = caret::trainControl(
-      method = "cv", number = 10),na.action = na.exclude)
-
-  ## test prediction model on test set
-  #pred_rf <- predict(
-    #modfit_rf, dplyr::select(testing,-MSI_status))
-  #confusionMatrix(pred_rf, as.factor(testing$MSI_status))
+      method = "cv", number = 10),
+    na.action = na.exclude)
 
   msi_model <- list()
   msi_model$fitted_model <- modfit_rf
   msi_model$variable_importance <- varImp(modfit_rf)
   msi_model$confusion_matrix <- confusionMatrix(
     predict(
-      modfit_rf, dplyr::select(testing,-MSI_status)),
-    as.factor(testing$MSI_status))
+      modfit_rf, dplyr::select(testing,-msi_status)),
+    as.factor(testing$msi_status))
   msi_model$sample_features <- msi_predmodel_data
   msi_model$sample_calls <- msi_data$calls
   msi_model$plots <- msi_plots
   msi_model$gdc_release <- gdc_release
+  msi_model$t_depth_min <- t_depth_min
+  msi_model$t_vaf_min <- t_vaf_min
   msi_model$n_test <- nrow(testing)
   msi_model$n_training <- nrow(training)
   msi_model$n_total <- nrow(training) + nrow(testing)
   msi_model$n_COAD <-
-    msi_pred_features_response |> dplyr::filter(tumor == 'COAD') |> nrow()
+    msi_pred_features_response |>
+    dplyr::filter(tumor == 'COAD') |> nrow()
   msi_model$n_STAD <-
-    msi_pred_features_response |> dplyr::filter(tumor == 'STAD') |> nrow()
+    msi_pred_features_response |>
+    dplyr::filter(tumor == 'STAD') |> nrow()
   msi_model$n_READ <-
-    msi_pred_features_response |> dplyr::filter(tumor == 'READ') |> nrow()
+    msi_pred_features_response |>
+    dplyr::filter(tumor == 'READ') |> nrow()
   msi_model$n_UCEC <-
-    msi_pred_features_response |> dplyr::filter(tumor == 'UCEC') |> nrow()
-
-  rmarkdown::render(
-    msi_report_template_rmarkdown,
-    output_file = "tcga_msi_classifier.html",
-    output_dir = file.path(
-      output_dir, tcga_release, "msi"),
-    clean = T,
-    intermediates_dir = file.path(
-      output_dir, tcga_release, "msi"),
-    quiet = T)
+    msi_pred_features_response |>
+    dplyr::filter(tumor == 'UCEC') |> nrow()
 
   msi_classifier <- list()
   msi_classifier$model <- modfit_rf
   msi_classifier$confMatrix <- msi_model$confusion_matrix
-  msi_classifier$tcga_dataset <- tcga_dataset
+  msi_classifier$training_dataset <- msi_pred_features_response
 
   saveRDS(
     msi_classifier,
     file = file.path(
-      output_dir, tcga_release, "msi", "tcga_msi_classifier.rds")
+      output_dir, gdc_release, "msi", "tcga_msi_classifier.rds")
   )
+
+  saveRDS(
+    msi_model,
+    file = file.path(
+      output_dir, gdc_release, "msi", "tcga_msi_model.rds")
+  )
+
+  quarto::quarto_render(
+    input = msi_report_template_rmarkdown,
+    output_file =
+      "tcga_msi_classifier.html")
+
+  system(paste0("mv code/tcga_msi_classifier.html ",
+                file.path(
+                  output_dir, gdc_release, "msi",
+                  "tcga_msi_classifier.html")))
 
 }

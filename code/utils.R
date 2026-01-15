@@ -1,7 +1,125 @@
 library(reshape2)
 
+
+read_gtf <- function(path, zero_based = TRUE) {
+  gtf <- rtracklayer::import(path)
+  gtf <- as.data.frame(gtf)
+  gtf <- dplyr::mutate_if(gtf, is.factor, as.character)
+  res <- dplyr::rename(gtf, chrom = seqnames)
+
+  if (zero_based) {
+    res <- dplyr::mutate(res, start = start - 1L)
+  }
+
+  tibble::as_tibble(res)
+}
+
+
+get_gencode_xref <- function(
+    data_raw_dir = NULL,
+    update_ensembl_gene = FALSE){
+
+  gencode_xref_fname <-
+    file.path(data_raw_dir, "gencode_v36_xref.rds")
+
+  gencode_xref <- list()
+  if(!file.exists(gencode_xref_fname) |
+     update_ensembl_gene == T){
+
+    gOncoX <- list()
+
+    gOncoX[['basic']] <- geneOncoX::get_basic(
+      cache_dir = data_raw_dir
+    )
+
+    gOncoX[['basic']]$records <-
+      gOncoX[['basic']]$records |>
+      dplyr::mutate(entrezgene = as.integer(
+        entrezgene
+      ))
+
+    gencode_gtf_fname <- file.path(
+      data_raw_dir,
+      "gencode",
+      "gencode.v36.annotation.gtf.gz")
+
+    gencode_xref_df <- as.data.frame(
+      read_gtf(path = gencode_gtf_fname) |>
+        dplyr::select(gene_id, hgnc_id) |>
+        dplyr::mutate(ensembl_gene_id = stringr::str_replace(
+          gene_id,"\\.[0-9]{1,}","")) |>
+        dplyr::select(ensembl_gene_id, hgnc_id) |>
+        dplyr::filter(!is.na(hgnc_id)) |>
+        dplyr::filter(!stringr::str_detect(
+          ensembl_gene_id,"_PAR_Y")) |>
+        dplyr::mutate(hgnc_id = stringr::str_replace(
+          hgnc_id, "HGNC:",""
+        )) |>
+        ## remove ensembl gene id's that are pointing
+        ## to the same gene symbol as other
+        ## ensembl identifiers
+        dplyr::filter(ensembl_gene_id != "ENSG00000145075") |>
+        dplyr::filter(ensembl_gene_id != "ENSG00000285437") |>
+        dplyr::filter(ensembl_gene_id != "ENSG00000286065") |>
+        dplyr::distinct() |>
+
+        ## join with geneOncoX basic records to get
+        ## gene symbols, entrezgene, gene biotype info
+        ## etc. that are up-to-date
+        dplyr::inner_join(
+          dplyr::select(gOncoX$basic$records,
+                        symbol, entrezgene,
+                        name,
+                        hgnc_id, gene_biotype),
+          by = "hgnc_id"
+        ) |>
+        dplyr::rename(
+          genename = "name",
+          biotype = "gene_biotype") |>
+        dplyr::select(
+          c("ensembl_gene_id",
+            "symbol",
+            "entrezgene",
+            "genename",
+            #"hgnc_id",
+            "biotype")
+        )
+    )
+
+    names(gencode_xref_df) <-
+      toupper(names(gencode_xref_df))
+
+    ## identify duplicates based on entrezgene
+    duplicates <- as.data.frame(
+      dplyr::group_by(gencode_xref_df, ENTREZGENE) |>
+        dplyr::summarise(n = dplyr::n()) |>
+        dplyr::filter(n > 1)
+    )
+
+    gencode_xref[['all']] <- gencode_xref_df |>
+      dplyr::anti_join(duplicates, by = "ENTREZGENE") |>
+      dplyr::arrange(.data$ENTREZGENE) |>
+      dplyr::distinct()
+
+    gencode_xref[['protein_coding']] <-
+      gencode_xref[['all']] |>
+      dplyr::filter(
+        .data$BIOTYPE == "protein_coding")
+
+    saveRDS(gencode_xref, file = gencode_xref_fname)
+  }else{
+    gencode_xref <- readRDS(file = gencode_xref_fname)
+  }
+
+  return(gencode_xref)
+
+
+}
+
+
 get_gdc_projects <- function(tcga = TRUE){
-  gdc_projects <- as.data.frame(TCGAbiolinks::getGDCprojects())
+  gdc_projects <- as.data.frame(
+    TCGAbiolinks::getGDCprojects())
 
   if(tcga == TRUE){
     gdc_projects <- gdc_projects |>
@@ -151,36 +269,6 @@ cohort_mutation_stats <- function(calls_df,
     mutation_status_sample <- dplyr::bind_rows(
       mutation_status_sample, mutation_status_pancancer)
 
-    if(genomic_strata == "mutation"){
-      mutation_status_sample <- calls_df |>
-        dplyr::filter(CODING_STATUS == "coding") |>
-        dplyr::select(bcr_patient_barcode, symbol,
-                      GENOMIC_CHANGE, HGVSp_Short,
-                      primary_site,
-                      primary_diagnosis_very_simplified) |>
-        dplyr::filter(!is.na(primary_site)) |>
-        dplyr::distinct() |>
-        dplyr::mutate(mut_status = "MUT") |>
-        dplyr::mutate(genomic_strata = "mutation",
-                      variant_type = vartype,
-                      consensus_calls = F)
-
-      mutation_status_pancancer <- calls_df |>
-        dplyr::filter(CODING_STATUS == "coding") |>
-        dplyr::select(bcr_patient_barcode, symbol,
-                      GENOMIC_CHANGE, HGVSp_Short) |>
-        dplyr::mutate(primary_site = "Pancancer",
-                      primary_diagnosis_very_simplified = "Pancancer") |>
-        dplyr::distinct() |>
-        dplyr::mutate(mut_status = "MUT") |>
-        dplyr::mutate(genomic_strata = "mutation",
-                      variant_type = vartype, consensus_calls = F)
-
-      mutation_status_sample <-
-        dplyr::bind_rows(mutation_status_sample,
-                         mutation_status_pancancer)
-    }
-
     sample_numbers_cohort <- as.data.frame(
       dplyr::select(clinical_df, bcr_patient_barcode,
                     primary_site, primary_diagnosis_very_simplified) |>
@@ -211,7 +299,8 @@ cohort_mutation_stats <- function(calls_df,
                       primary_site, genomic_strata,
                       variant_type, consensus_calls) |>
         dplyr::summarise(samples_mutated = dplyr::n(), .groups = "drop") |>
-        dplyr::left_join(sample_numbers_cohort) |>
+        #dplyr::left_join(sample_numbers_cohort) |>
+        dplyr::left_join(sample_numbers_cohort, by = "primary_site") |>
         dplyr::mutate(percent_mutated =
                         round((samples_mutated / tot_samples) * 100,
                               digits = num_digits))
@@ -223,31 +312,6 @@ cohort_mutation_stats <- function(calls_df,
         dplyr::mutate(percentile = dplyr::ntile(percent_mutated, 100),
                       decile = dplyr::ntile(percent_mutated,10))
     )
-
-
-    if(genomic_strata == "mutation"){
-      mutation_stats <- as.data.frame(
-        dplyr::group_by(mutation_status_sample,
-                        symbol, GENOMIC_CHANGE,
-                        HGVSp_Short, primary_site,
-                        genomic_strata,
-                        variant_type, consensus_calls) |>
-          dplyr::summarise(samples_mutated = dplyr::n(),
-                           .groups = "drop") |>
-          dplyr::left_join(sample_numbers_cohort) |>
-          dplyr::mutate(
-            percent_mutated = round((samples_mutated / tot_samples) * 100,
-                                    digits = num_digits))
-      )
-
-      mutation_stats <- as.data.frame(
-        mutation_stats |>
-          dplyr::group_by(primary_site, variant_type) |>
-          dplyr::mutate(percentile = dplyr::ntile(percent_mutated, 100),
-                        decile = dplyr::ntile(percent_mutated,10))
-      )
-    }
-
 
     if(clinical_strata == "site_diagnosis"){
       sample_numbers_cohort <- as.data.frame(
@@ -281,7 +345,9 @@ cohort_mutation_stats <- function(calls_df,
                         genomic_strata,
                         variant_type, consensus_calls) |>
           dplyr::summarise(samples_mutated = dplyr::n(), .groups = "drop") |>
-          dplyr::left_join(sample_numbers_cohort) |>
+          dplyr::left_join(sample_numbers_cohort,
+                           by = c("primary_site",
+                                  "primary_diagnosis_very_simplified")) |>
           dplyr::mutate(percent_mutated = round(
             (samples_mutated / tot_samples) * 100, digits = num_digits))
       )
@@ -295,29 +361,6 @@ cohort_mutation_stats <- function(calls_df,
             percent_mutated, 100),
             decile = dplyr::ntile(percent_mutated,10))
       )
-
-      if(genomic_strata == "mutation"){
-        mutation_stats <- as.data.frame(
-          dplyr::group_by(
-            mutation_status_sample, symbol, GENOMIC_CHANGE, HGVSp_Short,
-            primary_site, primary_diagnosis_very_simplified,
-            genomic_strata, variant_type, consensus_calls) |>
-            dplyr::summarise(samples_mutated = dplyr::n(), .groups = "drop") |>
-            dplyr::left_join(sample_numbers_cohort) |>
-            dplyr::mutate(percent_mutated = round(
-              (samples_mutated / tot_samples) * 100, digits = num_digits))
-        )
-
-        mutation_stats <- as.data.frame(
-          mutation_stats |>
-            dplyr::group_by(
-              primary_site, primary_diagnosis_very_simplified,
-              variant_type) |>
-            dplyr::mutate(percentile = dplyr::ntile(
-              percent_mutated, 100),
-              decile = dplyr::ntile(percent_mutated,10))
-        )
-      }
     }
   }else{
     if(vartype == "cna_homdel" | vartype == "cna_ampl"){
@@ -404,7 +447,7 @@ cohort_mutation_stats <- function(calls_df,
                         primary_site, genomic_strata,
                         variant_type, consensus_calls) |>
           dplyr::summarise(samples_mutated = dplyr::n(), .groups = "drop") |>
-          dplyr::left_join(sample_numbers_cohort) |>
+          dplyr::left_join(sample_numbers_cohort, by ="primary_site") |>
           dplyr::mutate(percent_mutated = round(
             (samples_mutated / tot_samples) * 100, digits = num_digits))
       )
@@ -450,7 +493,9 @@ cohort_mutation_stats <- function(calls_df,
             primary_diagnosis_very_simplified,
             genomic_strata, variant_type, consensus_calls) |>
             dplyr::summarise(samples_mutated = dplyr::n(), .groups = "drop") |>
-            dplyr::left_join(sample_numbers_cohort) |>
+            dplyr::left_join(sample_numbers_cohort,
+                             by = c("primary_site",
+                                    "primary_diagnosis_very_simplified")) |>
             dplyr::mutate(percent_mutated = round(
               (samples_mutated / tot_samples) * 100, digits = num_digits))
         )
@@ -466,7 +511,6 @@ cohort_mutation_stats <- function(calls_df,
     }
   }
   return(mutation_stats)
-  #TODO: quantiles
 
 
 }
@@ -476,55 +520,191 @@ cohort_mutation_stats <- function(calls_df,
 # ++++++++++++++++++++++++++++
 # cormat : matrix of the correlation coefficients
 # pmat : matrix of the correlation p-values
-flattenCorrMatrix <- function(cormat, pmat) {
-  ut <- upper.tri(cormat)
-  data.frame(
-    row = rownames(cormat)[row(cormat)[ut]],
-    column = rownames(cormat)[col(cormat)[ut]],
-    cor  =(cormat)[ut],
-    p = pmat[ut]
-  )
-}
+# flattenCorrMatrix <- function(cormat, pmat) {
+#   ut <- upper.tri(cormat)
+#   data.frame(
+#     row = rownames(cormat)[row(cormat)[ut]],
+#     column = rownames(cormat)[col(cormat)[ut]],
+#     cor  =(cormat)[ut],
+#     p = pmat[ut]
+#   )
+# }
 
-tcga_make_coexpression <- function(tumor = "BRCA", method = "pearson",
-                                   write_rds = T, release = "release27_20201029"){
-  rds_fname <- paste0('data/rnaseq/tcga_rnaseq_',tumor,'_',release,'.rds')
+
+coexpression_mat <- function(
+    tumor = "BRCA",
+    method = "pearson",
+    min_tpm_expressed = 1,
+    min_frac_expressed = 0.25,
+    min_nonzero_overlap = 0.25,
+    var_quantile = 0.25,
+    fdr_cutoff = 0.05,
+    correlation_threshold = 0.7,
+    output_dir = "",
+    input_dir = "",
+    write_rds = T,
+    release = "release45_20251204"){
+
+  rds_fname <- glue::glue(
+    "output/{release}/rnaseq/rnaseq_{tumor}.rds")
   corr_df <- NULL
   if(file.exists(rds_fname)){
     expression_data <- readRDS(file=rds_fname)
-    ## get FPKM values and perform log transformation (add 1 to avoid log2 of 0)
-    mat <- log2(expression_data$fpkm$matrix + 1)
 
-    ## transpose matrix (rows are tumor samples, columns are genes)
+    ## 0) get TPM values
+    mat <- expression_data$matrix$tpm$tumor
+
+    ## transpose -> samples x genes
     t_mat <- t(mat)
 
-    rm(mat)
-    rm(expression_data)
+    rm(mat, expression_data)
+    n_samples <- nrow(t_mat)
 
-    ## remove genes with zero variance (co-exp correlation undefined)
-    t_mat <- t_mat[, timeSeries::colVars(t_mat) != 0]
+    # 1) Filter genes expressed in >= 25% of samples
+    #    (SCOPE: gene - biological )
+    keep_expr <- colSums(
+      t_mat > min_tpm_expressed) >=
+      (min_frac_expressed * n_samples)
+    t_mat <- t_mat[, keep_expr]
 
-    corr_mat <- Hmisc::rcorr(t_mat, type = method)
+    # 2) Log-transform
+    t_mat_log <- log2(t_mat + 1)
 
-    ## keep upper triangle only
-    corr_mat$r[lower.tri(corr_mat$r)] <- NA
-    corr_mat$P[lower.tri(corr_mat$P)] <- NA
+    # 3) Remove lowest 25% variance genes
+    #    (SCOPE: gene - biological )
+    gene_var <- timeSeries::colVars(t_mat_log)
+    var_cut  <- quantile(
+      gene_var, probs = var_quantile, na.rm = TRUE)
 
-    corr_df <- as.data.frame(setNames(reshape2::melt(corr_mat$r, na.rm = T), c('symbol_A', 'symbol_B', 'r')))
-    pval_df <- as.data.frame(setNames(reshape2::melt(corr_mat$P, na.rm = T), c('symbol_A', 'symbol_B', 'p_value')))
+    t_mat_log <- t_mat_log[, gene_var > var_cut]
 
-    corr_df$symbol_A <- as.character(corr_df$symbol_A)
-    corr_df$symbol_B <- as.character(corr_df$symbol_B)
-    pval_df$symbol_A <- as.character(pval_df$symbol_A)
-    pval_df$symbol_B <- as.character(pval_df$symbol_B)
+    # 4) Correlation calculation
+    corr_mat <- Hmisc::rcorr(
+      t_mat_log, type = method)
 
-    corr_df <- corr_df |> dplyr::inner_join(pval_df)
+    # keep upper triangle only
+    corr_mat$r[lower.tri(corr_mat$r, diag = TRUE)] <- NA
+    corr_mat$P[lower.tri(corr_mat$P, diag = TRUE)] <- NA
 
-    saveRDS(corr_df,file="data/rnaseq/co_expression/corr_mat_",tumor,"_20190326.rds")
+    corr_df <- reshape2::melt(
+      corr_mat$r, na.rm = TRUE)
+    colnames(corr_df) <-
+      c("symbol_A", "symbol_B", "r")
+
+
+    # 5) Filter gene pairs based on
+    #    non-zero overlap (SCOPE: gene pairs - biological)
+    min_nz <- n_samples * min_nonzero_overlap
+
+    # Precompute binary expression (samples x genes)
+    expr_binary <- t_mat > 0
+
+    nz_mat <- crossprod(expr_binary)
+    corr_df$nonzero_overlap <- nz_mat[
+          cbind(corr_df$symbol_A, corr_df$symbol_B)]
+
+    # Filter pairs
+    corr_df <- corr_df |>
+      dplyr::filter(nonzero_overlap >= min_nz)
+
+    pval_df <- reshape2::melt(
+      corr_mat$P, na.rm = TRUE)
+    colnames(pval_df) <-
+      c("symbol_A", "symbol_B", "p_value")
+
+    corr_df <- dplyr::inner_join(
+      corr_df, pval_df,
+      by = c("symbol_A", "symbol_B"))
+
+    # 6) FDR correction and filtering (SCOPE: gene pairs - statistical)
+    corr_df$fdr <- p.adjust(
+      corr_df$p_value, method = "BH")
+    corr_df <- corr_df |>
+      dplyr::filter(
+        fdr < fdr_cutoff &
+          abs(r) >= correlation_threshold) |>
+      dplyr::arrange(dplyr::desc(abs(r)))
+
+    # === 7) Add Median [Q1 - Q3] per gene in log2(TPM + 1) ===
+    gene_stats <- data.frame(
+      symbol = colnames(t_mat_log),
+      median = apply(t_mat_log, 2,
+                     median, na.rm = TRUE),
+      Q1 = apply(t_mat_log, 2,
+                 quantile, probs = 0.25,
+                 na.rm = TRUE),
+      Q3 = apply(t_mat_log, 2,
+                 quantile, probs = 0.75,
+                 na.rm = TRUE)
+    )
+
+    # Create formatted string "Median [Q1 - Q3]"
+    gene_stats$expr_summary <- paste0(
+      round(gene_stats$median, 2),
+      " [", round(gene_stats$Q1, 2),
+      " - ", round(gene_stats$Q3, 2), "]"
+    )
+
+    # Join summaries for each gene in the pair
+    corr_df <- corr_df |>
+      dplyr::left_join(
+        gene_stats[, c("symbol", "expr_summary")],
+        by = c("symbol_A" = "symbol")
+      ) |>
+      dplyr::rename(expr_A = expr_summary) |>
+      dplyr::left_join(
+        gene_stats[, c("symbol", "expr_summary")],
+        by = c("symbol_B" = "symbol")
+      ) |>
+      dplyr::rename(expr_B = expr_summary)
+
+    saveRDS(
+      corr_df,
+      file=glue::glue("{output_dir}/coexpmat_{tumor}_{release}.rds"))
 
   }
-  return(corr_df)
+
 }
+#
+# tcga_make_coexpression <- function(tumor = "BRCA", method = "pearson",
+#                                    write_rds = T, release = "release27_20201029"){
+#   rds_fname <- paste0('data/rnaseq/tcga_rnaseq_',tumor,'_',release,'.rds')
+#   corr_df <- NULL
+#   if(file.exists(rds_fname)){
+#     expression_data <- readRDS(file=rds_fname)
+#     ## get FPKM values and perform log transformation (add 1 to avoid log2 of 0)
+#     mat <- log2(expression_data$fpkm$matrix + 1)
+#
+#     ## transpose matrix (rows are tumor samples, columns are genes)
+#     t_mat <- t(mat)
+#
+#     rm(mat)
+#     rm(expression_data)
+#
+#     ## remove genes with zero variance (co-exp correlation undefined)
+#     t_mat <- t_mat[, timeSeries::colVars(t_mat) != 0]
+#
+#     corr_mat <- Hmisc::rcorr(t_mat, type = method)
+#
+#     ## keep upper triangle only
+#     corr_mat$r[lower.tri(corr_mat$r)] <- NA
+#     corr_mat$P[lower.tri(corr_mat$P)] <- NA
+#
+#     corr_df <- as.data.frame(setNames(reshape2::melt(corr_mat$r, na.rm = T), c('symbol_A', 'symbol_B', 'r')))
+#     pval_df <- as.data.frame(setNames(reshape2::melt(corr_mat$P, na.rm = T), c('symbol_A', 'symbol_B', 'p_value')))
+#
+#     corr_df$symbol_A <- as.character(corr_df$symbol_A)
+#     corr_df$symbol_B <- as.character(corr_df$symbol_B)
+#     pval_df$symbol_A <- as.character(pval_df$symbol_A)
+#     pval_df$symbol_B <- as.character(pval_df$symbol_B)
+#
+#     corr_df <- corr_df |> dplyr::inner_join(pval_df)
+#
+#     saveRDS(corr_df,file="data/rnaseq/co_expression/corr_mat_",tumor,"_20190326.rds")
+#
+#   }
+#   return(corr_df)
+# }
 
 tile_aberration_plot <- function(qgenes, tcga_gene_data, cstrata = "site", vtype = "snv_indel", percentile = FALSE){
 
@@ -622,92 +802,92 @@ tile_aberration_plot <- function(qgenes, tcga_gene_data, cstrata = "site", vtype
   return(p)
 }
 
+#
+#
+# tcga_significant_coexpression <- function(tumor = "BRCA", basedir = "/Volumes/sigven/tcga/data/rnaseq/co_expression"){
+#   rds_fname <- paste0(basedir,"/corr_mat_",tumor,"_20190917.rds")
+#   if(!(file.exists(rds_fname))){
+#     return(0)
+#   }
+#   ## get moderate ([0.4,0.6]), strong ([0.6,0.8]), and very strong (>0.8) positively correlated genes
+#   ## get moderate ([-0.4,-0.6]), strong ([-0.6,-0.8]), and very strong (< -0.8) negatively correlated genes
+#   significant_co_expression <- readRDS(rds_fname) |>
+#     dplyr::filter(p_value < 0.000001 & ((r > 0 & r >= 0.4) | (r < 0 & r <= -0.4))) |>
+#     dplyr::mutate(tumor = tumor)
+#
+#   return(significant_co_expression)
+# }
+#
+# tcga_geneset_expression <- function(qgenes, tumor = "BRCA",
+#                                      rnaseq_datatype = "fpkm",
+#                                      tcga_clinical = NULL,
+#                                      tcga_release = "release27_20201029"){
+#   query_genes_df <- data.frame('symbol' = qgenes, stringsAsFactors = F)
+#   rnaseq_rds_file <- paste0("/Users/sigven/research/tcga/data/rnaseq/tcga_rnaseq_",tumor,"_",tcga_release,".rds")
+#   if(!file.exists(rnaseq_rds_file)){
+#     next
+#   }
+#   m <- readRDS(file=rnaseq_rds_file)
+#   rnaseq_df <- dfrtopics::gather_matrix(m$fpkm$matrix, col_names = c('symbol','tumor_sample_barcode','expr'))
+#   if(rnaseq_datatype == "counts"){
+#     rnaseq_df <- dfrtopics::gather_matrix(m$counts$matrix, col_names = c('symbol','tumor_sample_barcode','expr'))
+#   }
+#   rnaseq_df <- rnaseq_df |>
+#     dplyr::inner_join(query_genes_df,by=c("symbol")) |>
+#     dplyr::mutate(measure = rnaseq_datatype) |>
+#     dplyr::filter(stringr::str_detect(tumor_sample_barcode,"-0[0-9][A-Z]$")) |>
+#     dplyr::mutate(sample_type = dplyr::if_else(!stringr::str_detect(tumor_sample_barcode,"-01[A-Z]$"),as.character(NA),"Primary Tumor")) |>
+#     dplyr::mutate(sample_type = dplyr::if_else(stringr::str_detect(tumor_sample_barcode,"-06[A-Z]$"),"Metastic",as.character(sample_type))) |>
+#     dplyr::mutate(bcr_patient_barcode = stringr::str_replace(tumor_sample_barcode,"-[0-9][0-9][A-Z]$","")) |>
+#     dplyr::mutate(log2_expr = log2(expr + 1))
+#
+#   if(!is.null(tcga_clinical)){
+#     rnaseq_df <- rnaseq_df |>
+#       dplyr::left_join(dplyr::select(tcga_clinical, bcr_patient_barcode, primary_site,
+#                                      primary_diagnosis_simplified, tumor), by=c("bcr_patient_barcode"))
+#   }else{
+#     rnaseq_df <- rnaseq_df |> dply::mutate(tumor = tumor)
+#   }
+#
+#   rnaseq_df$median_expr <- median(rnaseq_df$expr)
+#   rnaseq_df$median_log2_expr <- median(rnaseq_df$log2_expr)
+#   rnaseq_df$lower_log2_expr <- quantile(rnaseq_df$log2_expr)[2]
+#   rnaseq_df$upper_log2_expr <- quantile(rnaseq_df$log2_expr)[4]
+#
+#   return(rnaseq_df)
+# }
+#
 
-
-tcga_significant_coexpression <- function(tumor = "BRCA", basedir = "/Volumes/sigven/tcga/data/rnaseq/co_expression"){
-  rds_fname <- paste0(basedir,"/corr_mat_",tumor,"_20190917.rds")
-  if(!(file.exists(rds_fname))){
-    return(0)
-  }
-  ## get moderate ([0.4,0.6]), strong ([0.6,0.8]), and very strong (>0.8) positively correlated genes
-  ## get moderate ([-0.4,-0.6]), strong ([-0.6,-0.8]), and very strong (< -0.8) negatively correlated genes
-  significant_co_expression <- readRDS(rds_fname) |>
-    dplyr::filter(p_value < 0.000001 & ((r > 0 & r >= 0.4) | (r < 0 & r <= -0.4))) |>
-    dplyr::mutate(tumor = tumor)
-
-  return(significant_co_expression)
-}
-
-tcga_geneset_expression <- function(qgenes, tumor = "BRCA",
-                                     rnaseq_datatype = "fpkm",
-                                     tcga_clinical = NULL,
-                                     tcga_release = "release27_20201029"){
-  query_genes_df <- data.frame('symbol' = qgenes, stringsAsFactors = F)
-  rnaseq_rds_file <- paste0("/Users/sigven/research/tcga/data/rnaseq/tcga_rnaseq_",tumor,"_",tcga_release,".rds")
-  if(!file.exists(rnaseq_rds_file)){
-    next
-  }
-  m <- readRDS(file=rnaseq_rds_file)
-  rnaseq_df <- dfrtopics::gather_matrix(m$fpkm$matrix, col_names = c('symbol','tumor_sample_barcode','expr'))
-  if(rnaseq_datatype == "counts"){
-    rnaseq_df <- dfrtopics::gather_matrix(m$counts$matrix, col_names = c('symbol','tumor_sample_barcode','expr'))
-  }
-  rnaseq_df <- rnaseq_df |>
-    dplyr::inner_join(query_genes_df,by=c("symbol")) |>
-    dplyr::mutate(measure = rnaseq_datatype) |>
-    dplyr::filter(stringr::str_detect(tumor_sample_barcode,"-0[0-9][A-Z]$")) |>
-    dplyr::mutate(sample_type = dplyr::if_else(!stringr::str_detect(tumor_sample_barcode,"-01[A-Z]$"),as.character(NA),"Primary Tumor")) |>
-    dplyr::mutate(sample_type = dplyr::if_else(stringr::str_detect(tumor_sample_barcode,"-06[A-Z]$"),"Metastic",as.character(sample_type))) |>
-    dplyr::mutate(bcr_patient_barcode = stringr::str_replace(tumor_sample_barcode,"-[0-9][0-9][A-Z]$","")) |>
-    dplyr::mutate(log2_expr = log2(expr + 1))
-
-  if(!is.null(tcga_clinical)){
-    rnaseq_df <- rnaseq_df |>
-      dplyr::left_join(dplyr::select(tcga_clinical, bcr_patient_barcode, primary_site,
-                                     primary_diagnosis_simplified, tumor), by=c("bcr_patient_barcode"))
-  }else{
-    rnaseq_df <- rnaseq_df |> dply::mutate(tumor = tumor)
-  }
-
-  rnaseq_df$median_expr <- median(rnaseq_df$expr)
-  rnaseq_df$median_log2_expr <- median(rnaseq_df$log2_expr)
-  rnaseq_df$lower_log2_expr <- quantile(rnaseq_df$log2_expr)[2]
-  rnaseq_df$upper_log2_expr <- quantile(rnaseq_df$log2_expr)[4]
-
-  return(rnaseq_df)
-}
-
-
-get_sample_vcf_data <- function(tcga_calls, sample_barcode = "TCGA-A2-A04W-01A", min_callers = 1){
-
-  sample_calls <- tcga_calls |>
-    dplyr::filter(Tumor_Sample_Barcode == sample_barcode) |>
-    dplyr::select(CHROM,POS,REF,ALT,t_depth,t_alt_count,n_depth,tumor,
-                  primary_site, algorithms, Tumor_Sample_Barcode) |>
-    dplyr::mutate(primary_site = stringr::str_replace_all(primary_site,"/| ","_")) |>
-    dplyr::mutate(num_callers = stringr::str_count(algorithms,pattern=",") + 1) |>
-    dplyr::filter(num_callers >= min_callers) |>
-    dplyr::mutate(FILTER = "PASS", QUAL = ".", ID = ".") |>
-    dplyr::mutate(TVAF = round(as.numeric(t_alt_count)/t_depth, digits = 4)) |>
-    dplyr::mutate(INFO = paste0("TDP=", t_depth,";TVAF=", TVAF,";CDP=", n_depth,";ALGS=",
-                                algorithms,";COHORT=", tumor,";PRIMARY_SITE=", primary_site,
-                                ";TUMOR_SAMPLE_BARCODE=",Tumor_Sample_Barcode)) |>
-    dplyr::select(CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO) |>
-    dplyr::distinct()
-
-  header_lines <- c("##fileformat=VCFv4.2",
-                    "##INFO=<ID=TUMOR_SAMPLE_BARCODE,Number=.,Type=String,Description=\"TCGA tumor smple barcode\">",
-                    "##INFO=<ID=TDP,Number=1,Type=Integer,Description=\"Sequencing depth at variant site - tumor\">",
-                    "##INFO=<ID=CDP,Number=1,Type=Integer,Description=\"Sequencing depth at variant site - control\">",
-                    "##INFO=<ID=TVAF,Number=1,Type=Float,Description=\"Allelic fraction of alternate allele - tumor\">",
-                    "##INFO=<ID=ALGS,Number=.,Type=String,Description=\"List of variant callers/algorithms that detected the variant\">",
-                    "##INFO=<ID=COHORT,Number=1,Type=String,Description=\"TCGA tumor sequencing cohort\">",
-                    "##INFO=<ID=PRIMARY_SITE,Number=1,Type=String,Description=\"Primary tumor site\">",
-                   "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")
-
-  return(list('vcf_content' = sample_calls, 'vcf_header_lines' = header_lines))
-
-}
+# get_sample_vcf_data <- function(tcga_calls, sample_barcode = "TCGA-A2-A04W-01A", min_callers = 1){
+#
+#   sample_calls <- tcga_calls |>
+#     dplyr::filter(Tumor_Sample_Barcode == sample_barcode) |>
+#     dplyr::select(CHROM,POS,REF,ALT,t_depth,t_alt_count,n_depth,tumor,
+#                   primary_site, algorithms, Tumor_Sample_Barcode) |>
+#     dplyr::mutate(primary_site = stringr::str_replace_all(primary_site,"/| ","_")) |>
+#     dplyr::mutate(num_callers = stringr::str_count(algorithms,pattern=",") + 1) |>
+#     dplyr::filter(num_callers >= min_callers) |>
+#     dplyr::mutate(FILTER = "PASS", QUAL = ".", ID = ".") |>
+#     dplyr::mutate(TVAF = round(as.numeric(t_alt_count)/t_depth, digits = 4)) |>
+#     dplyr::mutate(INFO = paste0("TDP=", t_depth,";TVAF=", TVAF,";CDP=", n_depth,";ALGS=",
+#                                 algorithms,";COHORT=", tumor,";PRIMARY_SITE=", primary_site,
+#                                 ";TUMOR_SAMPLE_BARCODE=",Tumor_Sample_Barcode)) |>
+#     dplyr::select(CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO) |>
+#     dplyr::distinct()
+#
+#   header_lines <- c("##fileformat=VCFv4.2",
+#                     "##INFO=<ID=TUMOR_SAMPLE_BARCODE,Number=.,Type=String,Description=\"TCGA tumor smple barcode\">",
+#                     "##INFO=<ID=TDP,Number=1,Type=Integer,Description=\"Sequencing depth at variant site - tumor\">",
+#                     "##INFO=<ID=CDP,Number=1,Type=Integer,Description=\"Sequencing depth at variant site - control\">",
+#                     "##INFO=<ID=TVAF,Number=1,Type=Float,Description=\"Allelic fraction of alternate allele - tumor\">",
+#                     "##INFO=<ID=ALGS,Number=.,Type=String,Description=\"List of variant callers/algorithms that detected the variant\">",
+#                     "##INFO=<ID=COHORT,Number=1,Type=String,Description=\"TCGA tumor sequencing cohort\">",
+#                     "##INFO=<ID=PRIMARY_SITE,Number=1,Type=String,Description=\"Primary tumor site\">",
+#                    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")
+#
+#   return(list('vcf_content' = sample_calls, 'vcf_header_lines' = header_lines))
+#
+# }
 
 make_pcgr_command <- function(pcgr_data_dir = NULL,
                               output_dir = NULL,
@@ -919,16 +1099,16 @@ make_cpsr_command <-
 #   system(paste0('rm -f ',sample_vcf_content_fname))
 #   #system(paste0('rm -f ',sample_vcf_fname))
 # }
-
-write_cna_bed <- function(cna_df, bed_path, bed_prefix){
-
-  sample_bed_fname <- paste0(bed_path,'/',bed_prefix,".bed")
-  sample_bed_content_fname <- paste0(bed_path,"/",bed_prefix,".vcf_content.tsv")
-  #write(header_lines,file=sample_vcf_fname,sep="\n")
-
-  assertable::assert_colnames(cna_df, c("Chromosome","Start","End","Segment_Mean"),
-                              only_colnames = F, quiet = T)
-  #write.table(sample_vcf, file=sample_vcf_content_fname,sep="\t",col.names = F,quote=F, row.names = F)
+#
+# write_cna_bed <- function(cna_df, bed_path, bed_prefix){
+#
+#   sample_bed_fname <- paste0(bed_path,'/',bed_prefix,".bed")
+#   sample_bed_content_fname <- paste0(bed_path,"/",bed_prefix,".vcf_content.tsv")
+#   #write(header_lines,file=sample_vcf_fname,sep="\n")
+#
+#   assertable::assert_colnames(cna_df, c("Chromosome","Start","End","Segment_Mean"),
+#                               only_colnames = F, quiet = T)
+#   #write.table(sample_vcf, file=sample_vcf_content_fname,sep="\t",col.names = F,quote=F, row.names = F)
 
   # system(paste0("cat ",sample_vcf_content_fname," | egrep -v \"^[XYM]\" | sort -k1,1n -k2,2n -k4,4 -k5,5 | awk '{printf(\"%s\\n\",$0);}' >> ",sample_vcf_fname))
   # system(paste0("cat ",sample_vcf_content_fname," | egrep \"^[XYM]\" | sort -k1,1 -k2,2n -k4,4 -k5,5 | awk '{printf(\"%s\\n\",$0);}' >> ",sample_vcf_fname))
@@ -937,7 +1117,7 @@ write_cna_bed <- function(cna_df, bed_path, bed_prefix){
   #
   # system(paste0('rm -f ',sample_vcf_content_fname))
   #system(paste0('rm -f ',sample_vcf_fname))
-}
+#}
 
 
 # get_unambiguous_gene_aliases <- function(
@@ -1189,116 +1369,116 @@ write_cna_bed <- function(cna_df, bed_path, bed_prefix){
 #
 # }
 
-get_tcga_driver_mutations <- function(
-    data_raw_dir = NA){
+# get_tcga_driver_mutations <- function(
+#     data_raw_dir = NA){
+#
+#   tcga_pcdm_raw_fname <-
+#     file.path(data_raw_dir,
+#               "driver_mutations",
+#               "Mutation.CTAT.3D.Scores.txt.gz")
+#
+#   tcga_pcdm_raw <- as.data.frame(
+#     readr::read_tsv(
+#       file = tcga_pcdm_raw_fname,
+#       show_col_types = F) |>
+#       janitor::clean_names() |>
+#       dplyr::select(gene,transcript,protein_change,
+#                     recurrence, code, new_linear_functional_flag,
+#                     new_linear_cancer_focused_flag,
+#                     new_3d_mutational_hotspot_flag) |>
+#       dplyr::filter(new_linear_functional_flag == 1 |
+#                       new_linear_cancer_focused_flag == 1 |
+#                       new_3d_mutational_hotspot_flag == 1) |>
+#       dplyr::distinct() |>
+#       dplyr::mutate(DISCOVERY_APPROACH_1 = dplyr::if_else(
+#         new_linear_functional_flag == 1,'CTAT_POPULATION','','')) |>
+#       dplyr::mutate(DISCOVERY_APPROACH_2 = dplyr::if_else(
+#         new_linear_cancer_focused_flag == 1,'CTAT_CANCER','','')) |>
+#       dplyr::mutate(DISCOVERY_APPROACH_3 = dplyr::if_else(
+#         new_3d_mutational_hotspot_flag == 1,'3D_STRUCTURE','','')) |>
+#       dplyr::mutate(driver_mutation = paste(
+#         DISCOVERY_APPROACH_1, DISCOVERY_APPROACH_2,
+#         DISCOVERY_APPROACH_3,sep="|")) |>
+#       dplyr::mutate(driver_mutation = stringr::str_replace(
+#         driver_mutation,"(^\\|)|(\\|$)",""))  |>
+#       dplyr::rename(SYMBOL = gene,
+#                     Feature = transcript,
+#                     HGVSp_Short = protein_change,
+#                     tumor = code) |>
+#       #dplyr::mutate(transvar_id = paste(symbol,hgvsp_short,sep=":")) |>
+#       dplyr::mutate(
+#         num_approaches = new_linear_functional_flag +
+#           new_linear_cancer_focused_flag +
+#           new_3d_mutational_hotspot_flag) |>
+#       dplyr::select(-c(DISCOVERY_APPROACH_1,DISCOVERY_APPROACH_2,DISCOVERY_APPROACH_3,
+#                        new_linear_functional_flag,new_linear_cancer_focused_flag,
+#                        new_3d_mutational_hotspot_flag)) |>
+#       dplyr::filter(num_approaches >= 2)
+#   )
+#
+#   driver_mutations <- list()
+#   driver_mutations[['raw']] <- tcga_pcdm_raw
+#   driver_mutations[['by_transcript_id']] <-
+#     tcga_pcdm_raw |>
+#     dplyr::select(-c(SYMBOL, recurrence,
+#                      tumor, num_approaches)) |>
+#     dplyr::distinct()
+#
+#   driver_mutations[['by_symbol']] <-
+#     tcga_pcdm_raw |>
+#     dplyr::select(-c(Feature, recurrence,
+#                      tumor, num_approaches)) |>
+#     dplyr::distinct()
+#
+#   return(driver_mutations)
+# }
 
-  tcga_pcdm_raw_fname <-
-    file.path(data_raw_dir,
-              "driver_mutations",
-              "Mutation.CTAT.3D.Scores.txt.gz")
-
-  tcga_pcdm_raw <- as.data.frame(
-    readr::read_tsv(
-      file = tcga_pcdm_raw_fname,
-      show_col_types = F) |>
-      janitor::clean_names() |>
-      dplyr::select(gene,transcript,protein_change,
-                    recurrence, code, new_linear_functional_flag,
-                    new_linear_cancer_focused_flag,
-                    new_3d_mutational_hotspot_flag) |>
-      dplyr::filter(new_linear_functional_flag == 1 |
-                      new_linear_cancer_focused_flag == 1 |
-                      new_3d_mutational_hotspot_flag == 1) |>
-      dplyr::distinct() |>
-      dplyr::mutate(DISCOVERY_APPROACH_1 = dplyr::if_else(
-        new_linear_functional_flag == 1,'CTAT_POPULATION','','')) |>
-      dplyr::mutate(DISCOVERY_APPROACH_2 = dplyr::if_else(
-        new_linear_cancer_focused_flag == 1,'CTAT_CANCER','','')) |>
-      dplyr::mutate(DISCOVERY_APPROACH_3 = dplyr::if_else(
-        new_3d_mutational_hotspot_flag == 1,'3D_STRUCTURE','','')) |>
-      dplyr::mutate(driver_mutation = paste(
-        DISCOVERY_APPROACH_1, DISCOVERY_APPROACH_2,
-        DISCOVERY_APPROACH_3,sep="|")) |>
-      dplyr::mutate(driver_mutation = stringr::str_replace(
-        driver_mutation,"(^\\|)|(\\|$)",""))  |>
-      dplyr::rename(SYMBOL = gene,
-                    Feature = transcript,
-                    HGVSp_Short = protein_change,
-                    tumor = code) |>
-      #dplyr::mutate(transvar_id = paste(symbol,hgvsp_short,sep=":")) |>
-      dplyr::mutate(
-        num_approaches = new_linear_functional_flag +
-          new_linear_cancer_focused_flag +
-          new_3d_mutational_hotspot_flag) |>
-      dplyr::select(-c(DISCOVERY_APPROACH_1,DISCOVERY_APPROACH_2,DISCOVERY_APPROACH_3,
-                       new_linear_functional_flag,new_linear_cancer_focused_flag,
-                       new_3d_mutational_hotspot_flag)) |>
-      dplyr::filter(num_approaches >= 2)
-  )
-
-  driver_mutations <- list()
-  driver_mutations[['raw']] <- tcga_pcdm_raw
-  driver_mutations[['by_transcript_id']] <-
-    tcga_pcdm_raw |>
-    dplyr::select(-c(SYMBOL, recurrence,
-                     tumor, num_approaches)) |>
-    dplyr::distinct()
-
-  driver_mutations[['by_symbol']] <-
-    tcga_pcdm_raw |>
-    dplyr::select(-c(Feature, recurrence,
-                     tumor, num_approaches)) |>
-    dplyr::distinct()
-
-  return(driver_mutations)
-}
-
-get_curated_docm_mutations <- function(
-    data_raw_dir = NA){
-
-  docm_curated_mutations <-
-    as.data.frame(
-      readr::read_tsv(
-        file = file.path(
-          data_raw_dir,
-          "curated_mutations",
-          "docm.grch38.tsv.gz"),
-        show_col_types = F) |>
-        dplyr::select(
-          disease, pmid, docm_id,
-          chrom, pos, ref, alt) |>
-        dplyr::mutate(docm_id = stringr::str_replace_all(
-          docm_id, "\\*","X"
-        )) |>
-        dplyr::mutate(docm_id = stringr::str_replace_all(
-          docm_id, ">","_"
-        )) |>
-        dplyr::mutate(
-          ref = as.character(ref),
-          alt = as.character(alt)) |>
-        dplyr::mutate(
-          disease = stringr::str_replace_all(
-            disease," ","_")) |>
-        dplyr::rename(
-          CHROM = chrom,
-          POS = pos,
-          REF = ref,
-          ALT = alt) |>
-        dplyr::group_by(CHROM, POS,
-                        REF, ALT) |>
-        dplyr::summarise(
-          docm_disease = paste(unique(disease),
-                               collapse = ","),
-          docm_pmid = paste(unique(sort(pmid)),
-                            collapse = ","),
-          docm_id = paste(unique(docm_id),
-                          collapse = ","),
-          .groups = "drop")
-    )
-
-  return(docm_curated_mutations)
-}
-
+# get_curated_docm_mutations <- function(
+#     data_raw_dir = NA){
+#
+#   docm_curated_mutations <-
+#     as.data.frame(
+#       readr::read_tsv(
+#         file = file.path(
+#           data_raw_dir,
+#           "curated_mutations",
+#           "docm.grch38.tsv.gz"),
+#         show_col_types = F) |>
+#         dplyr::select(
+#           disease, pmid, docm_id,
+#           chrom, pos, ref, alt) |>
+#         dplyr::mutate(docm_id = stringr::str_replace_all(
+#           docm_id, "\\*","X"
+#         )) |>
+#         dplyr::mutate(docm_id = stringr::str_replace_all(
+#           docm_id, ">","_"
+#         )) |>
+#         dplyr::mutate(
+#           ref = as.character(ref),
+#           alt = as.character(alt)) |>
+#         dplyr::mutate(
+#           disease = stringr::str_replace_all(
+#             disease," ","_")) |>
+#         dplyr::rename(
+#           CHROM = chrom,
+#           POS = pos,
+#           REF = ref,
+#           ALT = alt) |>
+#         dplyr::group_by(CHROM, POS,
+#                         REF, ALT) |>
+#         dplyr::summarise(
+#           docm_disease = paste(unique(disease),
+#                                collapse = ","),
+#           docm_pmid = paste(unique(sort(pmid)),
+#                             collapse = ","),
+#           docm_id = paste(unique(docm_id),
+#                           collapse = ","),
+#           .groups = "drop")
+#     )
+#
+#   return(docm_curated_mutations)
+# }
+#
 
 # load_cancer_hotspots <- function(
 #     data_raw_dir = NA,

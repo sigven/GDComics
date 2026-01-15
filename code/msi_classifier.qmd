@@ -1,0 +1,261 @@
+---
+title: "MSI classification from somatic mutation profiles"
+subtitle: |
+   Utilization of indel distribution and genomic repeat tracks for microsatellite instability (MSI) prediction
+author:
+  - name: Sigve Nakken
+    orcid: 0000-0001-8468-2050
+    affiliations:
+      - ref: ous
+      - ref: uio
+    degrees:
+      - PhD
+affiliations:
+  - id: ous
+    name: Department of Tumor Biology, Institute for Cancer Research, Oslo University Hospital
+    city: Oslo
+    country: Norway
+    url: https://ous-research.no/tumorbiology/
+  - id: uio
+    name: Centre for Cancer Cell Reprogramming, Institute of Clinical Medicine, Faculty of Medicine, University of Oslo
+    city: Oslo
+    country: Norway
+    url: https://www.med.uio.no/cancell/english/
+date: "`r Sys.Date()`"
+bibliography: bibliography.bib
+format: 
+  html:
+    embed-resources: true
+    smooth-scroll: true
+    page-layout: full
+    fontsize: 1.1em
+    toc: true
+    toc_depth: 2
+    grid:
+      body-width: 940px
+
+---
+
+```{r setup}
+#| include: false
+#| echo: false
+#| cache: false
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = TRUE,
+  message = TRUE,
+  comment = "##",
+  R.options = list(width = 75)
+)
+
+msi_model <- readRDS(
+  file = 
+    file.path(
+      "/Users/sigven/project_data/packages/package__GDComics/GDComics",
+      "output",
+      "release45_20251204",
+      "msi",
+      "tcga_msi_model.rds"
+    )
+)
+
+var_imp <- data.frame(
+  'feature' = rownames(
+    caret::varImp(msi_model$fitted_model)$importance), 
+  'importance' = round(
+    caret::varImp(msi_model$fitted_model)$importance$Overall, digits = 2), 
+  stringsAsFactors = F) |>
+  dplyr::arrange(dplyr::desc(importance))
+
+```
+
+## Introduction
+
+Microsatellite instability (MSI) is the result of impaired DNA mismatch repair and constitutes a cellular phenotype of clinical significance in many cancer types, most prominently colorectal cancers, stomach cancers, endometrial cancers, and ovarian cancers. Traditionally, MSI detection is based on a PCR-based assay of 5 microsatellite markers (two mono- and three dinucleotide repeats). 
+
+Recently, additional detection approaches have been proposed, utilizing next-generating sequencing data. Here, we demonstrate how a robust MSI classifier can be developed from the distribution of somatic mutations in a tumor, taking advantage of insertions/deletions in repetitive DNA , as well as the presense of deleterious mutations in known MSI-associated genes, i.e. POLE and the MMR gene family.
+
+## Methods
+
+### Assay-based determination of MSI status of TCGA samples
+
+The assay-based MSI status (_MSI-H_, _MSI-L_, and _MSS_) of tumor samples within four different TCGA cohorts (colon (COAD), rectal (READ), endometrial (UCEC), and stomach (STAD)) were obtained through the [GenomicDataCommons R package](https://bioconductor.github.io/GenomicDataCommons/) (`r msi_model$gdc_release`). TCGA used a panel of four mononucleotide repeats (BAT25, BAT26, BAT40, and TGFBRII) and three dinucleotide repeats (D2S123, D5S346, and D17S250) to determine MSI status, except for a subset of CRC genomes evaluated by five mononucleotide markers (BAT25, BAT26, NR21, NR24, and MONO27). Based on this assay, tumor samples were classified as _MSI-H_ (>40% of markers altered), MSI-L (<40% of markers altered), and MSS (no marker altered). 
+As done in previous studies (e.g. [@Huang2015-bv]), we do not here distinguish betweeen _MSI-L_ and _MSS_ tumors, but rather treat both as _MSS_ (or more precisely _non-MSI.H_) tumors. 
+
+### TCGA mutation data
+
+Somatic SNVs/Indels of TCGA samples in four cohorts (colon, rectal, endometrial and stomach) were downloaded as annotated MAF files (build hg38) through the [GenomicDataCommons R package](https://bioconductor.github.io/GenomicDataCommons/) (`r msi_model$gdc_release`). We excluded noncoding calls (e.g. variants in UTR, regulatory regions (upstream/downstream), intron sequence etc.). Calls with a sequencing depth (*t_depth*) < `r msi_model$t_depth_min`, or with an allelic fraction (*t_alt_count* / *t_depth*) < `r msi_model$t_vaf_min` were excluded.
+Furthermore, we only considered samples for which at least **n = 50** variant calls satisfied the AF/DP criteria. The list below shows the number of samples analyzed pr. tumor type, in addition to the median number of somatic mutations (SNVs,InDels) pr. sample:
+
+```{r sample_stats}
+#| echo: true
+#| include: false
+
+snv_stats <- as.data.frame(
+  msi_model$sample_calls |> 
+    dplyr::filter(Variant_Type == 'SNP') |> 
+    dplyr::group_by(tumor,tumor_sample_barcode) |> 
+    dplyr::summarise(n_sample = dplyr::n(), 
+                     .groups = "drop") |>
+    dplyr::ungroup() |>
+    dplyr::group_by(tumor) |> 
+    dplyr::summarise(median = median(n_sample),
+                     .groups = "drop"))
+indel_stats <- as.data.frame(
+  msi_model$sample_calls |> 
+    dplyr::filter(Variant_Type != 'SNP') |> 
+    dplyr::group_by(tumor,tumor_sample_barcode) |> 
+    dplyr::summarise(n_sample = dplyr::n(),
+                  .groups = "drop") |> 
+    dplyr::ungroup() |>
+    dplyr::group_by(tumor) |> 
+    dplyr::summarise(median = median(n_sample),
+                     .groups = "drop"))
+
+```
+
+1. Colon Adenocarcinoma (COAD): `r msi_model$n_COAD` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'COAD',]$median`,`r indel_stats[indel_stats$tumor == 'COAD',]$median`
+2. Rectum Adenocarcinoma (READ): `r msi_model$n_READ` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'READ',]$median`,`r indel_stats[indel_stats$tumor == 'READ',]$median`
+3. Stomach Adenocarcinoma (STAD): `r msi_model$n_STAD` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'STAD',]$median`,`r indel_stats[indel_stats$tumor == 'STAD',]$median`
+4. Uterine Corpus Endometrial Adenocarcinoma (UCEC): `r msi_model$n_UCEC` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'UCEC',]$median`,`r indel_stats[indel_stats$tumor == 'UCEC',]$median`
+
+### Sequence repeat data
+Two tracks containing the locations of repetitive DNA were downloaded from UCSC (build hg38):
+
+* simpleRepeats
+* windowMasker + sDust
+
+### Statistical analysis
+We implemented all statistical modeling and exploratory analysis in R, in particular utilizing the [caret package for predictive modelling](http://topepo.github.io/caret/index.html) and [ggplot2 package](http://ggplot2.org/) for data visualization.
+
+## Results
+
+We set out to develop a statistical classifier that distinguishes tumors with microsatellite instability from their stable counterparts. Our goal was to perform the classification using data available only within the somatic mutation profile. The training dataset included n = `r msi_model$n_training` exome-sequenced tumor samples from four different tumor types (TCGA), making up 70% of the total dataset (leaving 30% (n = `r msi_model$n_test`) for the test set). All of these `r msi_model$n_total` samples had already been assayed for MSI status using a mononucleotide marker assay (71 samples in COAD/READ/STAD/UCEC did not have an MSI status, resulting in a slightly reduced total number as to the ones presented above for mutation calls). Based on observations in previous studies [@Huang2015-bv; @Cortes-Ciriano2017-vl] and explorations of the mutation and repeats data, we defined the following quantities per sample as features for MSI classification:
+
+* tumor mutational burden (rate of SNVs, InDels, SNVs + InDels in a defined coding target region size (mb), for TCGA we used 34Mb)
+* fraction of indels (among indels + SNVs) in chromosomal regions annotated as repeats by simpleRepeats
+* fraction of indels (among indels + SNVs) in chromosomal regions annotated as repeats by windowMasker + sDust
+* fraction of indels (among indels + SNVs) in non-repetitive chromosomal regions
+* fraction of indels (among indels + SNVs)
+* fraction of SNVs (among indels + SNVs) in regions annotated as repeats by windowMasker + sDust
+* Coding mutation in POLD1
+* Coding mutation in POLE
+* Coding mutation in MSH2
+* Coding mutation in MSH3
+* Coding mutation in MSH6
+* Coding mutation in MLH1
+* Coding mutation in MLH3
+* Coding mutation in PMS1
+* Coding mutation in PMS2
+
+<!--We deliberately designed the features to be independent of sequencing approach (e.g. _exome_, which was used in the training data from TCGA). In this manner, the classifier could be applied also in non-exome settings, such as whole-genome or targeted panels (note however that we have not been able to test the classifier in other scenarios). --> 
+
+Next, we explored the suggested predictive features defined above for _MSS_ and _MSI.H_ samples within the training dataset. Figures 1,2 and 3 indicate the discriminatory potential of some key features, particularly the indel fraction (both within and outside of repetitive DNA regions). 
+<br><br>
+
+#### Figure 1: Enrichment/depletion of mutated samples - coding MMR and POL mutations
+```{r mmr_pole_1}
+#| fig-width: 10
+#| fig-height: 4
+#| echo: false
+
+ggpubr::ggarrange(
+  msi_model$plots$gene_enrichment[[1]],
+  msi_model$plots$gene_enrichment[[2]],
+  msi_model$plots$gene_enrichment[[3]],
+  ncol = 3, nrow = 1)
+```
+
+```{r mmr_pole_2}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 4
+
+ggpubr::ggarrange(
+  msi_model$plots$gene_enrichment[[4]],
+  msi_model$plots$gene_enrichment[[5]],
+  msi_model$plots$gene_enrichment[[6]],
+  ncol = 3, nrow = 1)
+```
+
+```{r mmr_pole_3}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 4
+
+ggpubr::ggarrange(
+  msi_model$plots$gene_enrichment[[7]],
+  msi_model$plots$gene_enrichment[[8]],
+  msi_model$plots$gene_enrichment[[9]],
+  ncol = 3, nrow = 1)
+```
+
+<br><br>
+
+#### Figure 2: TCGA InDel fraction (non-repetitive DNA)
+
+```{r indel_frac}
+#| echo: false
+#| fig-width: 14
+#| fig-height: 10
+
+msi_model$plots$indelFracPlot
+```
+
+#### Figure 3: TCGA InDel fraction in repetitive DNA (windowMasker + sDust)
+
+```{r rep_indel_frac}
+#| echo: false
+#| fig-width: 14
+#| fig-height: 6
+
+msi_model$plots$indelWinMaskPlot
+```
+
+Finally, we used the Random Forest algorithm of the caret package to train an MSI classifier. Specifically, predictive features were subject to preprocessing (scaling and transformation (YeoJohnson)), and ten-fold cross-validation was applied (see R command below):
+
+```{r code_example}
+#| eval: false
+
+modfit_rf <- caret::train(as.factor(MSI_status) ~ ., method="rf", data=training,
+preProcess=c("YeoJohnson","scale"),trControl = caret::trainControl(method = "cv", number = 10),
+na.action = na.exclude)
+```
+
+The table below indicates the relative importance (scale from 0 to 100) of the variables used for prediction (i.e. using the [varImp()](https://topepo.github.io/caret/variable-importance.html) method) in the resulting model:
+
+
+ _Feature_ | _Importance_
+ --- | ---
+ `r var_imp[1,"feature"]`    |       **`r var_imp[1,"importance"]`**
+ `r var_imp[2,"feature"]`    |       **`r var_imp[2,"importance"]`**
+ `r var_imp[3,"feature"]`    |       **`r var_imp[3,"importance"]`**
+ `r var_imp[4,"feature"]`    |       **`r var_imp[4,"importance"]`**
+ `r var_imp[5,"feature"]`    |       **`r var_imp[5,"importance"]`**
+ `r var_imp[6,"feature"]`    |       **`r var_imp[6,"importance"]`**
+ `r var_imp[7,"feature"]`    |       **`r var_imp[7,"importance"]`**
+ `r var_imp[8,"feature"]`    |       **`r var_imp[8,"importance"]`**
+ `r var_imp[9,"feature"]`    |       **`r var_imp[9,"importance"]`**
+ `r var_imp[10,"feature"]`    |       **`r var_imp[10,"importance"]`**
+ `r var_imp[11,"feature"]`    |       **`r var_imp[11,"importance"]`**
+ `r var_imp[12,"feature"]`    |       **`r var_imp[12,"importance"]`**
+ `r var_imp[13,"feature"]`    |       **`r var_imp[13,"importance"]`**
+ `r var_imp[14,"feature"]`    |       **`r var_imp[14,"importance"]`**
+ `r var_imp[15,"feature"]`    |       **`r var_imp[15,"importance"]`**
+ `r var_imp[16,"feature"]`    |       **`r var_imp[16,"importance"]`**
+ `r var_imp[17,"feature"]`    |       **`r var_imp[17,"importance"]`**
+ 
+<br><br>
+
+We applied the resulting MSI classification model to the test set of 435 tumor samples (comprising _MSI.H_ and _MSS_ samples from colon, rectum, stomach, and endometrium), and obtained the following performance:
+
+* Sensitivity: **`r round(msi_model$confusion_matrix$byClass[1], digits = 3)`**
+* Specificity: **`r round(msi_model$confusion_matrix$byClass[2], digits = 3)`**
+
+<br><br>
+
+## Author contributions {.appendix}
+
+SN: Collected data from TCGA, built the MSI classifier, wrote up the report.
+
