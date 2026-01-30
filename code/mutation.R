@@ -1,4 +1,4 @@
-suppressPackageStartupMessages(library(BSgenome.Hsapiens.UCSC.hg38))
+#suppressPackageStartupMessages(library(BSgenome.Hsapiens.UCSC.hg38))
 
 #' Get or make TCGA SNV/InDel data from GDC
 #'

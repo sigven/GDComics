@@ -518,19 +518,21 @@
 #
 # }
 
-#' Get TCGA clinical data from GDC
+#' Get clinical data from GDC (TCGA)
 #'
 #' @param output_dir Directory to save/load processed clinical data
-#' @param gdc_release TCGA data release version
+#' @param gdc_release GDC data release version
+#' @param gdc_projects GDC project identifiers
 #' @param tumor_samples_only Only return tumor samples (ignore normal samples)
-#' @param overwrite Whether to overwrite existing processed data
+#' @param overwrite Overwrite existing processed data
 #'
-#' @return A list containing TCGA clinical data frames
+#' @return A data.frame with clinical info for all tumor samples in TCGA
 #' @export
 #'
-gdc_tcga_clinical <- function(
+gdc_clinical <- function(
     output_dir = NA,
     gdc_release = "release45_20251204",
+    gdc_projects = NULL,
     tumor_samples_only = TRUE,
     overwrite = FALSE){
 
@@ -554,7 +556,7 @@ gdc_tcga_clinical <- function(
 
   cases_raw <- GenomicDataCommons::cases() |>
     GenomicDataCommons::filter(
-      ~ project.project_id %in% tcga_projects
+      ~ project.project_id %in% gdc_projects
     ) |>
     GenomicDataCommons::select(
       c(
@@ -657,6 +659,23 @@ gdc_tcga_clinical <- function(
       "-[0-9]{2}[A-Z]{1}$","")) |>
     dplyr::distinct()
 
+
+  tcga_case_info[['msi']] <-
+    gdc_msi(
+      output_dir = output_dir,
+      data_raw_dir = data_raw_dir,
+      gdc_release = "release45_20251204",
+      overwrite = F)
+
+  tcga_case_info[['subtypes']] <-
+    tcga_molecular_subtypes()
+
+  tcga_case_info[['er_pr_her2']] <-
+    gdc_er_pr_her2(
+      output_dir = output_dir,
+      gdc_release = gdc_release,
+      overwrite = F)
+
   tcga_clinical_df <-
     tcga_case_info[['project']] |>
     dplyr::inner_join(
@@ -709,7 +728,54 @@ gdc_tcga_clinical <- function(
       dplyr::everything()
     ) |>
     clean_site_diagnosis() |>
-    clean_survival()
+    clean_survival() |>
+    dplyr::left_join(
+      dplyr::select(
+        tcga_case_info[['msi']],
+        c("bcr_patient_barcode",
+          "tumor_sample_barcode",
+          "msi_status")),
+      by = c("bcr_patient_barcode",
+             "tumor_sample_barcode")
+    ) |>
+    dplyr::left_join(
+      tcga_case_info[['subtypes']][['per_tumor']],
+      by = "tumor_sample_barcode"
+    ) |>
+    dplyr::left_join(
+      tcga_case_info[['er_pr_her2']],
+      by = "bcr_patient_barcode"
+    ) |>
+    dplyr::distinct()
+
+  clinical_with_subtypes <- tcga_clinical_df |>
+    dplyr::filter(!is.na(subtype_selected)) |>
+    dplyr::distinct()
+  clinical_without_subtypes <- tcga_clinical_df |>
+    dplyr::filter(is.na(subtype_selected)) |>
+    dplyr::select(-c(
+        "subtype_mrna",
+        "subtype_cna",
+        "subtype_dnameth",
+        "subtype_other",
+        "subtype_protein",
+        "subtype_integrative",
+        "subtype_mirna",
+        "subtype_selected")) |>
+    dplyr::left_join(
+      tcga_case_info[['subtypes']][['per_patient']],
+      by = "bcr_patient_barcode"
+    ) |>
+    dplyr::distinct()
+
+
+  tcga_clinical_df <- dplyr::bind_rows(
+    clinical_with_subtypes,
+    clinical_without_subtypes) |>
+    dplyr::arrange(
+      bcr_patient_barcode,
+      tumor_sample_barcode
+    )
 
   if(!dir.exists(
     file.path(output_dir, gdc_release))){
@@ -1077,7 +1143,10 @@ clean_site_diagnosis <- function(
     dplyr::filter(tumor != 'PCPG' |
                     (tumor == 'PCPG' & primary_site != 'Other/Unknown')) |>
     dplyr::left_join(
-      tissue_subtype_codes, relationship = "many-to-many") |>
+      tissue_subtype_codes,
+      by = c("primary_site",
+             "primary_diagnosis_very_simplified"),
+      relationship = "many-to-many") |>
     dplyr::rename(site_diagnosis_code = tissue_code_2) |>
     dplyr::rename(icd10_code = icd_10_code) |>
     dplyr::mutate(tumor_stage = ajcc_pathologic_stage) |>
@@ -1184,7 +1253,7 @@ clean_survival <- function(clinical_df = NULL){
 
 }
 
-get_molecular_subtypes <- function(){
+tcga_molecular_subtypes <- function(){
 
   subtype_data <-
     TCGAbiolinks::PanCancerAtlas_subtypes()
@@ -1196,6 +1265,24 @@ get_molecular_subtypes <- function(){
     dplyr::filter(nchar(pan.samplesID) == 12) |>
     dplyr::mutate(bcr_patient_barcode = pan.samplesID) |>
     dplyr::select(-c("pan.samplesID","cancer.type")) |>
+    dplyr::rename_with(tolower) |>
+    dplyr::mutate(
+      subtype_selected =
+        stringr::str_replace(
+          stringr::str_replace_all(
+            stringr::str_replace(
+              subtype_selected,
+              "^[A-Z]{3,4}\\.",""),
+            "_"," "),
+          "GBM LGG\\.","")
+    ) |>
+    dplyr::mutate(
+      subtype_selected = dplyr::if_else(
+        subtype_selected == "NA",
+        NA_character_,
+        as.character(subtype_selected)
+      )
+    ) |>
     dplyr::distinct()
 
   subtype_results[['per_tumor']] <-
@@ -1212,6 +1299,76 @@ get_molecular_subtypes <- function(){
         as.character(tumor_sample_barcode))
     ) |>
     dplyr::select(-c("pan.samplesID","cancer.type")) |>
+    dplyr::rename_with(tolower) |>
+    dplyr::mutate(
+      subtype_selected =
+        stringr::str_replace(
+          stringr::str_replace_all(
+            stringr::str_replace(
+              subtype_selected,
+              "^[A-Z]{3,4}\\.",""),
+            "_"," "),
+          "GBM LGG\\.","")
+    ) |>
+    dplyr::mutate(
+      subtype_selected = dplyr::if_else(
+        subtype_selected == "NA",
+        NA_character_,
+        as.character(subtype_selected)
+      )
+    ) |>
     dplyr::distinct()
+
+  return(subtype_results)
+
+}
+
+#' GDC ER/PR/HER2 status for TCGA-BRCA samples
+#'
+#' @param output_dir Output directory for processed data
+#' @param gdc_release GDC data release version
+#' @param data_raw_dir Data raw directory
+#' @param overwrite Overwrite existing processed data
+#'
+#' @return Data frame with ER/PR/HER2 annotations for BRCA samples
+#'
+#' @export
+gdc_er_pr_her2 <- function(
+    output_dir = NULL,
+    gdc_release = "release45_20251204",
+    data_raw_dir = NULL,
+    overwrite = F){
+
+  output_fname <-
+    file.path(
+      output_dir,
+      gdc_release,
+      "clinical",
+      "tcga_er_pr_her2.rds"
+    )
+
+  if(file.exists(output_fname) & overwrite == F){
+    er_pr_her2_data <- readRDS(file = output_fname)
+    return(er_pr_her2_data)
+  }
+
+  gdc_supplement_cache_path <-
+    file.path(
+      data_raw_dir,
+      "GDCdata",
+      "clinical_supplement"
+    )
+
+  er_pr_her2_data <-
+    get_er_pr_her2_status(
+      gdc_supplement_cache_path = gdc_supplement_cache_path
+    )
+
+  saveRDS(
+    er_pr_her2_data,
+    file = output_fname
+  )
+
+  return(er_pr_her2_data)
 
 }

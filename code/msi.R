@@ -11,7 +11,7 @@
 #' @return Data frame with MSI data
 #'
 #' @export
-gdc_tcga_msi <- function(
+gdc_msi <- function(
   output_dir = NULL,
   gdc_release = "release45_20251204",
   data_raw_dir = NULL,

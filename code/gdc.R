@@ -81,19 +81,19 @@
 #'
 #' @param gdc_cna_cache_path character, path to GDC MAF download cache
 #' @param tcga logical, whether to download TCGA MAF files only
-#' @param tcga_projects character vector, TCGA project IDs
+#' @param gdc_projects character vector, TCGA project IDs
 #'
 #'
 download_cna_tsv <- function(
     tcga = TRUE,
     gdc_cna_cache_path = NULL,
-    tcga_projects = NULL){
+    gdc_projects = NULL){
 
   assertthat::assert_that(
     !is.null(gdc_cna_cache_path)
   )
   assertthat::assert_that(
-    !is.null(tcga_projects)
+    !is.null(gdc_projects)
   )
   assertthat::assert_that(
     dir.exists(gdc_cna_cache_path))
@@ -126,7 +126,7 @@ download_cna_tsv <- function(
     dplyr::select(-c("project")) |>
     ## only keep TCGA projects
     dplyr::filter(
-      project_id %in% tcga_projects
+      project_id %in% gdc_projects
     ) |>
     dplyr::inner_join(
       data.frame(
@@ -147,7 +147,7 @@ download_cna_tsv <- function(
       )
 
   ## Download MAF files for each TCGA project
-  for(project in tcga_projects){
+  for(project in gdc_projects){
 
     ## Create project directory in GDC cache path
     if(!(dir.exists(
@@ -202,19 +202,19 @@ download_cna_tsv <- function(
 #'
 #' @param gdc_rna_cache_path character, path to GDC MAF download cache
 #' @param tcga logical, whether to download TCGA MAF files only
-#' @param tcga_projects character vector, TCGA project IDs
+#' @param gdc_projects character vector, TCGA project IDs
 #'
 #'
 download_rna_tsv <- function(
     tcga = TRUE,
     gdc_rna_cache_path = NULL,
-    tcga_projects = NULL){
+    gdc_projects = NULL){
 
   assertthat::assert_that(
     !is.null(gdc_rna_cache_path)
   )
   assertthat::assert_that(
-    !is.null(tcga_projects)
+    !is.null(gdc_projects)
   )
   assertthat::assert_that(
     dir.exists(gdc_cna_cache_path))
@@ -275,7 +275,7 @@ download_rna_tsv <- function(
     dplyr::rename("bcr_patient_barcode" = "submitter_id") |>
     ## only keep TCGA projects
     dplyr::filter(
-      project_id %in% tcga_projects
+      project_id %in% gdc_projects
     ) |>
     dplyr::inner_join(
       gdc_rna_sample_info,
@@ -303,7 +303,7 @@ download_rna_tsv <- function(
   )
 
   ## Download MAF files for each TCGA project
-  for(project in tcga_projects){
+  for(project in gdc_projects){
 
     ## Create project directory in GDC cache path
     if(!(dir.exists(
@@ -358,13 +358,13 @@ download_rna_tsv <- function(
 #'
 #' @param gdc_maf_cache_path character, path to GDC MAF download cache
 #' @param tcga logical, whether to download TCGA MAF files only
-#' @param tcga_projects character vector, TCGA project IDs
+#' @param gdc_projects character vector, TCGA project IDs
 #'
 #'
 download_ssm_maf <- function(
     tcga = TRUE,
     gdc_maf_cache_path = NULL,
-    tcga_projects = c("TCGA-READ","TCGA-COAD",
+    gdc_projects = c("TCGA-READ","TCGA-COAD",
                       "TCGA-STAD","TCGA-UCEC")){
 
   maf_GDCfilesResults <-
@@ -395,7 +395,7 @@ download_ssm_maf <- function(
     dplyr::select(-c("project")) |>
     ## only keep TCGA projects
     dplyr::filter(
-      project_id %in% tcga_projects
+      project_id %in% gdc_projects
     ) |>
     dplyr::inner_join(
       data.frame(
@@ -410,7 +410,7 @@ download_ssm_maf <- function(
     )
 
   ## Download MAF files for each TCGA project
-  for(project in tcga_projects){
+  for(project in gdc_projects){
 
     ## Create project directory in GDC cache path
     if(!(dir.exists(
@@ -447,6 +447,195 @@ download_ssm_maf <- function(
   }
 
 }
+
+#' Function that downloads GDC Biospecimen supplement XML files (TCGA projects only)
+#'
+#' @param gdc_biospecimen_cache_path character, path to GDC download cache
+#' @param tcga logical, whether to download TCGA biospecimen XML files
+#' @param gdc_projects character vector, TCGA project IDs to download biospecimen
+#'
+#'
+download_biospecimen_xml <- function(
+    tcga = TRUE,
+    gdc_biospecimen_cache_path = NULL,
+    gdc_projects = c("TCGA-READ","TCGA-COAD",
+                     "TCGA-STAD","TCGA-UCEC")){
+
+  biospecimen_GDCfilesResults <-
+    GenomicDataCommons::files() |>
+
+    ## filter on biospecimen supplement files
+    GenomicDataCommons::filter(
+      ~ data_category == "biospecimen" &
+        data_type == "Biospecimen Supplement") |>
+    GenomicDataCommons::select(
+      c("file_id","data_type",
+        "submitter_id","cases.project.project_id")) |>
+    GenomicDataCommons::results_all()
+
+  ## make data frame from complex nested list
+  biospecimen_xml_df <-
+    as.data.frame(
+      dplyr::bind_rows(
+        biospecimen_xml_GDCfilesResults$cases, .id = "id")) |>
+    dplyr::mutate(project_id = project$project_id) |>
+    dplyr::select(-c("project")) |>
+    ## only keep TCGA projects
+    dplyr::filter(
+      project_id %in% gdc_projects
+    ) |>
+    dplyr::inner_join(
+      data.frame(
+        id =
+          biospecimen_xml_GDCfilesResults$id,
+        file_id =
+          biospecimen_xml_GDCfilesResults$file_id,
+        submitter_id =
+          biospecimen_xml_GDCfilesResults$submitter_id,
+        data_type =
+          biospecimen_xml_GDCfilesResults$data_type
+      ),
+      by = "id"
+    ) |>
+
+    ## only keep biospecimen files
+    dplyr::filter(
+      stringr::str_detect(
+        .data$submitter_id,"org_biospecimen.TCGA"))
+
+  ## Download biospecimen XML files for each TCGA project
+  for(project in gdc_projects){
+
+    ## Create project directory in GDC cache path
+    if(!(dir.exists(
+      file.path(
+        gdc_biospecimen_cache_path, project)))){
+      dir.create(
+        file.path(
+          gdc_biospecimen_cache_path, project),
+        recursive = T)
+    }
+
+    ## filter biospecimen XML data frame for current project
+    project_xml_df <-
+      biospecimen_xml_df |>
+      dplyr::filter(
+        project_id == project
+      )
+
+
+    ## set path to project GDC download cache
+    GenomicDataCommons::gdc_set_cache(
+      directory = file.path(
+        gdc_biospecimen_cache_path, project))
+
+    ## download biospecimen XML files
+    purrr::walk(
+      project_xml_df$file_id,
+      ~ GenomicDataCommons::gdcdata(
+        .x,
+        use_cached = T,
+        progress = F
+      )
+    )
+  }
+
+}
+
+#' Function that downloads GDC clinical supplement
+#' XML files (BCR, TCGA projects only)
+#'
+#' @param gdc_supplement_cache_path character, path to GDC download cache
+#' @param tcga logical, whether to download TCGA supplement XML files
+#' @param gdc_projects character vector, TCGA project IDs to
+#' download supplement
+#' @export
+#'
+download_clinical_supplement <- function(
+    tcga = TRUE,
+    gdc_supplement_cache_path = NULL,
+    gdc_projects = c("TCGA-BRCA")){
+
+  clinical_suppl_results <-
+    GenomicDataCommons::files() |>
+    GenomicDataCommons::filter(
+      cases.project.project_id == 'TCGA-BRCA' &
+        data_type == 'Clinical Supplement' &
+        data_format == 'bcr xml') |>
+    GenomicDataCommons::select(
+      c("file_id","data_type",
+        "submitter_id",
+        "cases.project.project_id")) |>
+    GenomicDataCommons::results_all()
+
+  ## make data frame from complex nested list
+  clinical_supplement_xml_df <-
+    as.data.frame(
+      dplyr::bind_rows(
+        clinical_suppl_results$cases, .id = "id")) |>
+    dplyr::mutate(project_id = project$project_id) |>
+    dplyr::select(-c("project")) |>
+    dplyr::inner_join(
+      data.frame(
+        id =
+          clinical_suppl_results$id,
+        file_id =
+          clinical_suppl_results$file_id,
+        submitter_id =
+          clinical_suppl_results$submitter_id,
+        data_type =
+          clinical_suppl_results$data_type
+      ),
+      by = "id"
+    ) |>
+    dplyr::mutate(
+      bcr_patient_barcode = stringr::str_replace_all(
+        submitter_id,
+        "nationwidechildrens.org_clinical\\.|\\.xml","")
+      )
+
+  ## Download clinical supplement XML files
+  ## for each TCGA project
+  for(project in gdc_projects){
+
+    ## Create project directory in GDC cache path
+    if(!(dir.exists(
+      file.path(
+        gdc_supplement_cache_path, project)))){
+      dir.create(
+        file.path(
+          gdc_supplement_cache_path, project),
+        recursive = T)
+    }
+
+    ## filter clinical supplement XML data frame
+    ## for current project
+    project_xml_df <-
+      clinical_supplement_xml_df |>
+      dplyr::filter(
+        .data$project_id == project
+      )
+
+
+    ## set path to project GDC download cache
+    GenomicDataCommons::gdc_set_cache(
+      directory = file.path(
+        gdc_supplement_cache_path, project))
+
+    ## download supplement XML files
+    purrr::walk(
+      project_xml_df$file_id,
+      ~ GenomicDataCommons::gdcdata(
+        .x,
+        use_cached = T,
+        progress = F
+      )
+    )
+  }
+
+}
+
+
 
 #' Function that loads GDC Simple Somatic Mutation MAF files
 #' (TCGA projects only)
@@ -505,99 +694,6 @@ load_ssm_maf <- function(
 
 
 
-#' Function that downloads GDC Biospecimen supplement XML files (TCGA projects only)
-#'
-#' @param gdc_biospecimen_cache_path character, path to GDC download cache
-#' @param tcga logical, whether to download TCGA biospecimen XML files
-#' @param tcga_projects character vector, TCGA project IDs to download biospecimen
-#'
-#'
-download_biospecimen_xml <- function(
-    tcga = TRUE,
-    gdc_biospecimen_cache_path = NULL,
-    tcga_projects = c("TCGA-READ","TCGA-COAD",
-                      "TCGA-STAD","TCGA-UCEC")){
-
-    biospecimen_GDCfilesResults <-
-      GenomicDataCommons::files() |>
-
-      ## filter on biospecimen supplement files
-      GenomicDataCommons::filter(
-        ~ data_category == "biospecimen" &
-          data_type == "Biospecimen Supplement") |>
-      GenomicDataCommons::select(
-        c("file_id","data_type",
-          "submitter_id","cases.project.project_id")) |>
-      GenomicDataCommons::results_all()
-
-    ## make data frame from complex nested list
-    biospecimen_xml_df <-
-      as.data.frame(
-        dplyr::bind_rows(
-          biospecimen_xml_GDCfilesResults$cases, .id = "id")) |>
-      dplyr::mutate(project_id = project$project_id) |>
-      dplyr::select(-c("project")) |>
-      ## only keep TCGA projects
-      dplyr::filter(
-        project_id %in% tcga_projects
-      ) |>
-      dplyr::inner_join(
-        data.frame(
-          id =
-            biospecimen_xml_GDCfilesResults$id,
-          file_id =
-            biospecimen_xml_GDCfilesResults$file_id,
-          submitter_id =
-            biospecimen_xml_GDCfilesResults$submitter_id,
-          data_type =
-            biospecimen_xml_GDCfilesResults$data_type
-        ),
-        by = "id"
-      ) |>
-
-      ## only keep biospecimen files
-      dplyr::filter(
-        stringr::str_detect(
-          .data$submitter_id,"org_biospecimen.TCGA"))
-
-    ## Download biospecimen XML files for each TCGA project
-    for(project in tcga_projects){
-
-      ## Create project directory in GDC cache path
-      if(!(dir.exists(
-        file.path(
-          gdc_biospecimen_cache_path, project)))){
-        dir.create(
-          file.path(
-            gdc_biospecimen_cache_path, project),
-          recursive = T)
-      }
-
-      ## filter biospecimen XML data frame for current project
-      project_xml_df <-
-        biospecimen_xml_df |>
-        dplyr::filter(
-          project_id == project
-        )
-
-
-      ## set path to project GDC download cache
-      GenomicDataCommons::gdc_set_cache(
-        directory = file.path(
-          gdc_biospecimen_cache_path, project))
-
-      ## download biospecimen XML files
-      purrr::walk(
-        project_xml_df$file_id,
-        ~ GenomicDataCommons::gdcdata(
-          .x,
-          use_cached = T,
-          progress = F
-        )
-      )
-    }
-
-  }
 
 
 #' Function that parses GDC Biospecimen supplement XML file
@@ -681,28 +777,99 @@ parse_biospecimen_xml <- function(xml_fname = NULL){
 
 }
 
+#' Function that parses GDC clinical supplement XML file
+#'
+#' Returns data frame with columns:
+#' - bcr_patient_barcode
+#' - ER status
+#' - PR status
+#' - HER2 status
+#'
+#' @param xml_fname character, path to GDC clinical
+#' supplement XML file
+#'
+#' @export
+#'
+parse_supplement_xml <- function(xml_fname = NULL){
+
+  df <- data.frame()
+
+  if(file.exists(xml_fname) &
+     endsWith(xml_fname,".xml")){
+
+    #cat(xml_fname, "\n")
+    bcr_patient_barcode_fname <-
+      stringr::str_replace(
+        basename(xml_fname),
+        "nationwidechildrens.org_clinical\\.|\\.xml","")
+
+    er_status <- NA
+    pr_status <- NA
+    her2_status <- NA
+    bcr_patient_barcode <- NA
+    x <- xml2::read_xml(xml_fname)
+
+    er_status <- xml2::xml_find_first(
+      x, ".//brca_shared:breast_carcinoma_estrogen_receptor_status") |>
+      xml2::xml_text(trim = TRUE)
+
+    pr_status <- xml2::xml_find_first(
+      x, ".//brca_shared:breast_carcinoma_progesterone_receptor_status") |>
+      xml2::xml_text(trim = TRUE)
+
+    her2_status <- xml2::xml_find_first(
+      x, ".//brca_shared:lab_proc_her2_neu_immunohistochemistry_receptor_status") |>
+      xml2::xml_text(trim = TRUE)
+
+    bcr_patient_barcode <- xml2::xml_find_first(
+      x, ".//shared:bcr_patient_barcode") |>
+      xml2::xml_text(trim = TRUE)
+
+    df <- data.frame(
+      'bcr_patient_barcode' = bcr_patient_barcode,
+      'er_status' = er_status,
+      'pr_status' = pr_status,
+      'her2_status' = her2_status,
+      stringsAsFactors = F) |>
+      dplyr::mutate(
+        er_status = dplyr::if_else(
+          er_status == "", NA_character_, er_status),
+        pr_status = dplyr::if_else(
+          pr_status == "", NA_character_, pr_status),
+        her2_status = dplyr::if_else(
+          her2_status == "", NA_character_, her2_status
+        )
+      )
+  }
+
+
+  return(df)
+
+}
+
+
 #' Function that retrieves MSI status from GDC Biospecimen supplement XML files (TCGA projects only)
 #'
 #' @param gdc_biospecimen_cache_path character, path to GDC download cache
-#' @param tcga_projects character vector, TCGA project IDs to download biospecimen
+#' @param gdc_projects character vector, TCGA project IDs to download biospecimen
 #'
 #' @export
 #'
 #'
 get_msi_status <- function(
     gdc_biospecimen_cache_path = NULL,
-    tcga_projects = c("TCGA-READ","TCGA-COAD",
+    gdc_projects = c("TCGA-READ","TCGA-COAD",
                       "TCGA-STAD","TCGA-UCEC")){
 
   assertthat::assert_that(
     !is.null(gdc_biospecimen_cache_path),
-    !is.null(tcga_projects)
+    !is.null(gdc_projects)
   )
   assertthat::assert_that(
     dir.exists(gdc_biospecimen_cache_path))
 
   msi_status <- list()
-  for(project in tcga_projects){
+  for(project in gdc_projects){
 
     project_xml_fnames <-
       list.files(
@@ -725,6 +892,52 @@ get_msi_status <- function(
   }
 
   return(dplyr::bind_rows(msi_status))
+
+}
+
+#' Function that retrieves ER/PR/HER2 status from
+#' GDC clinical supplement XML files (TCGA projects only)
+#'
+#' @param gdc_supplement_cache_path character, path to GDC download cache
+#' @param gdc_projects character vector, TCGA project IDs to download biospecimen
+#'
+#' @export
+#'
+#'
+get_er_pr_her2_status <- function(
+    gdc_supplement_cache_path = NULL,
+    gdc_projects = c("TCGA-BRCA")){
+
+  assertthat::assert_that(
+    !is.null(gdc_supplement_cache_path),
+    !is.null(gdc_projects)
+  )
+  assertthat::assert_that(
+    dir.exists(gdc_supplement_cache_path))
+
+  receptor_status <- list()
+  for(project in gdc_projects){
+
+    project_xml_fnames <-
+      list.files(
+        path = file.path(
+          gdc_supplement_cache_path, project),
+        pattern = "\\.xml$",
+        full.names = T,
+        recursive = T
+      )
+
+    project_er_pr_her2_status_df <-
+      purrr::map_df(
+        project_xml_fnames,
+        parse_supplement_xml
+      )
+
+    receptor_status[[project]] <-
+      project_er_pr_her2_status_df
+  }
+
+  return(dplyr::bind_rows(receptor_status))
 
 }
 

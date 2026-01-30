@@ -39,22 +39,30 @@ if(!dir.exists(
 data_raw_dir <- file.path(
   here::here(), "data-raw"
 )
-gdc_biospecimen_cache_path <-
-  file.path(
-    data_raw_dir,
-    "GDCdata",
-    "biospecimen"
-  )
-
+# Get Gencode Xref -----
 gencode_xref <- get_gencode_xref(
   data_raw_dir = data_raw_dir
 )
 
+####--- MSI status ----####
+msi_data <- gdc_msi(
+  output_dir = output_dir,
+  gdc_release = gdc_release,
+  data_raw_dir = data_raw_dir,
+  overwrite = FALSE)
+
+####--- ER/PR/HER2 status ----####
+er_pr_her2_data <- gdc_er_pr_her2(
+  output_dir = output_dir,
+  gdc_release = gdc_release,
+  data_raw_dir = data_raw_dir,
+  overwrite = TRUE)
 
 #####--- Clinical -----#####
-tcga_clinical_info <- gdc_tcga_clinical(
+tcga_clinical_info <- gdc_clinical(
   gdc_release = gdc_release,
-  overwrite = F,
+  gdc_projects = gdc_projects,
+  overwrite = T,
   tumor_samples_only = T,
   output_dir = output_dir)
 
@@ -70,21 +78,21 @@ tcga_calls <- gdc_tcga_snv(
 )
 
 ####--- Gene mutation rate ----####
-tcga_gene_mutation_rate <- calculate_tcga_gene_mutation_rate2(
+tcga_gene_mutation_rate <- calculate_tcga_gene_mutation_rate(
   gdc_projects = gdc_projects,
   gdc_release = gdc_release,
   output_dir = output_dir
 )
 
 #####--- VCF output -----#####
-write_tcga_vcf2(
+write_tcga_vcf(
   tcga_calls = tcga_calls,
   output_dir = output_dir,
   gdc_release = gdc_release)
 
 
 ####--- TMB -----####
-tmb_stats <- calculate_sample_tmb2(
+tmb_stats <- calculate_sample_tmb(
   tcga_calls = tcga_calls,
   t_depth_min = 30,
   t_vaf_min = 0.05,
@@ -92,12 +100,7 @@ tmb_stats <- calculate_sample_tmb2(
   overwrite = TRUE,
   output_dir = output_dir)
 
-####--- MSI status ----####
-msi_data <- gdc_tcga_msi(
-  output_dir = output_dir,
-  gdc_release = gdc_release,
-  data_raw_dir = data_raw_dir,
-  overwrite = FALSE)
+
 
 ####--- CNA -----#####
 for(project in gdc_projects){
