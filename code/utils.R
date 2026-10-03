@@ -43,12 +43,12 @@ get_gencode_xref <- function(
       "gencode",
       "gencode.v36.annotation.gtf.gz")
 
-    gencode_xref_df <- as.data.frame(
+    gencode_raw <- as.data.frame(
       read_gtf(path = gencode_gtf_fname) |>
-        dplyr::select(gene_id, hgnc_id) |>
+        #dplyr::select(gene_id, hgnc_id) |>
         dplyr::mutate(ensembl_gene_id = stringr::str_replace(
           gene_id,"\\.[0-9]{1,}","")) |>
-        dplyr::select(ensembl_gene_id, hgnc_id) |>
+        #dplyr::select(ensembl_gene_id, hgnc_id) |>
         dplyr::filter(!is.na(hgnc_id)) |>
         dplyr::filter(!stringr::str_detect(
           ensembl_gene_id,"_PAR_Y")) |>
@@ -61,6 +61,47 @@ get_gencode_xref <- function(
         dplyr::filter(ensembl_gene_id != "ENSG00000145075") |>
         dplyr::filter(ensembl_gene_id != "ENSG00000285437") |>
         dplyr::filter(ensembl_gene_id != "ENSG00000286065") |>
+        dplyr::distinct()
+    )
+
+    gencode_xref[['transcript']] <- as.data.frame(
+      gencode_raw |>
+        dplyr::select(
+          c("ensembl_gene_id",
+            "hgnc_id",
+            "transcript_id")) |>
+        dplyr::filter(
+          !is.na(transcript_id)
+        ) |>
+        dplyr::rename(
+          ensembl_transcript_id =
+          "transcript_id"
+        ) |>
+        dplyr::mutate(
+          ensembl_transcript_id = stringr::str_replace(
+            ensembl_transcript_id,"\\.[0-9]{1,}","")
+        ) |>
+        dplyr::distinct() |>
+        dplyr::inner_join(
+          dplyr::select(
+            gOncoX$basic$records,
+            symbol, entrezgene,
+            name,
+            hgnc_id, gene_biotype),
+          by = "hgnc_id"
+        ) |>
+        dplyr::rename(
+          genename = "name",
+          biotype = "gene_biotype")
+    )
+
+    names(gencode_xref$transcript) <-
+      toupper(names(gencode_xref$transcript))
+
+    gencode_xref_df <- as.data.frame(
+      gencode_raw |>
+        dplyr::select(c("ensembl_gene_id",
+                        "hgnc_id")) |>
         dplyr::distinct() |>
 
         ## join with geneOncoX basic records to get

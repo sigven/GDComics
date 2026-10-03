@@ -23,7 +23,7 @@ affiliations:
     url: https://www.med.uio.no/cancell/english/
 date: "`r Sys.Date()`"
 bibliography: bibliography.bib
-format: 
+format:
   html:
     embed-resources: true
     smooth-scroll: true
@@ -49,22 +49,23 @@ knitr::opts_chunk$set(
   R.options = list(width = 75)
 )
 
-msi_model <- readRDS(
-  file = 
+msi_training_record <- readRDS(
+  file =
     file.path(
       "/Users/sigven/project_data/packages/package__GDComics/GDComics",
       "output",
-      "release45_20251204",
+      "release46_20260810",
+      #"release45_20251204",
       "msi",
-      "tcga_msi_model.rds"
+      "tcga_msi_training_record.rds"
     )
 )
 
 var_imp <- data.frame(
   'feature' = rownames(
-    caret::varImp(msi_model$fitted_model)$importance), 
+    caret::varImp(msi_training_record$fitted_model)$importance),
   'importance' = round(
-    caret::varImp(msi_model$fitted_model)$importance$Overall, digits = 2), 
+    caret::varImp(msi_training_record$fitted_model)$importance$Overall, digits = 2),
   stringsAsFactors = F) |>
   dplyr::arrange(dplyr::desc(importance))
 
@@ -72,53 +73,53 @@ var_imp <- data.frame(
 
 ## Introduction
 
-Microsatellite instability (MSI) is the result of impaired DNA mismatch repair and constitutes a cellular phenotype of clinical significance in many cancer types, most prominently colorectal cancers, stomach cancers, endometrial cancers, and ovarian cancers. Traditionally, MSI detection is based on a PCR-based assay of 5 microsatellite markers (two mono- and three dinucleotide repeats). 
+Microsatellite instability (MSI) is the result of impaired DNA mismatch repair and constitutes a cellular phenotype of clinical significance in many cancer types, most prominently colorectal cancers, stomach cancers, endometrial cancers, and ovarian cancers. Traditionally, MSI detection is based on a PCR-based assay of 5 microsatellite markers (two mono- and three dinucleotide repeats).
 
-Recently, additional detection approaches have been proposed, utilizing next-generating sequencing data. Here, we demonstrate how a robust MSI classifier can be developed from the distribution of somatic mutations in a tumor, taking advantage of insertions/deletions in repetitive DNA , as well as the presense of deleterious mutations in known MSI-associated genes, i.e. POLE and the MMR gene family.
+Recently, additional detection approaches have been proposed, utilizing next-generating sequencing data. Here, we demonstrate how a robust MSI classifier can be developed from the distribution of somatic mutations in a tumor, taking advantage of insertions/deletions in repetitive DNA, as well as the presence of deleterious mutations in known MSI-associated genes, i.e. POLE and the MMR gene family.
 
 ## Methods
 
 ### Assay-based determination of MSI status of TCGA samples
 
-The assay-based MSI status (_MSI-H_, _MSI-L_, and _MSS_) of tumor samples within four different TCGA cohorts (colon (COAD), rectal (READ), endometrial (UCEC), and stomach (STAD)) were obtained through the [GenomicDataCommons R package](https://bioconductor.github.io/GenomicDataCommons/) (`r msi_model$gdc_release`). TCGA used a panel of four mononucleotide repeats (BAT25, BAT26, BAT40, and TGFBRII) and three dinucleotide repeats (D2S123, D5S346, and D17S250) to determine MSI status, except for a subset of CRC genomes evaluated by five mononucleotide markers (BAT25, BAT26, NR21, NR24, and MONO27). Based on this assay, tumor samples were classified as _MSI-H_ (>40% of markers altered), MSI-L (<40% of markers altered), and MSS (no marker altered). 
-As done in previous studies (e.g. [@Huang2015-bv]), we do not here distinguish betweeen _MSI-L_ and _MSS_ tumors, but rather treat both as _MSS_ (or more precisely _non-MSI.H_) tumors. 
+The assay-based MSI status (_MSI-H_, _MSI-L_, and _MSS_) of tumor samples within four different TCGA cohorts (colon (COAD), rectal (READ), endometrial (UCEC), and stomach (STAD)) were obtained through the [GenomicDataCommons R package](https://bioconductor.github.io/GenomicDataCommons/) (`r msi_training_record$gdc_release`). TCGA used a panel of four mononucleotide repeats (BAT25, BAT26, BAT40, and TGFBRII) and three dinucleotide repeats (D2S123, D5S346, and D17S250) to determine MSI status, except for a subset of CRC genomes evaluated by five mononucleotide markers (BAT25, BAT26, NR21, NR24, and MONO27). Based on this assay, tumor samples were classified as _MSI-H_ (>40% of markers altered), MSI-L (<40% of markers altered), and MSS (no marker altered).
+As done in previous studies (e.g. [@Huang2015-bv]), we do not here distinguish between _MSI-L_ and _MSS_ tumors, but rather treat both as _MSS_ (or more precisely _non-MSI.H_) tumors.
 
 ### TCGA mutation data
 
-Somatic SNVs/Indels of TCGA samples in four cohorts (colon, rectal, endometrial and stomach) were downloaded as annotated MAF files (build hg38) through the [GenomicDataCommons R package](https://bioconductor.github.io/GenomicDataCommons/) (`r msi_model$gdc_release`). We excluded noncoding calls (e.g. variants in UTR, regulatory regions (upstream/downstream), intron sequence etc.). Calls with a sequencing depth (*t_depth*) < `r msi_model$t_depth_min`, or with an allelic fraction (*t_alt_count* / *t_depth*) < `r msi_model$t_vaf_min` were excluded.
-Furthermore, we only considered samples for which at least **n = 50** variant calls satisfied the AF/DP criteria. The list below shows the number of samples analyzed pr. tumor type, in addition to the median number of somatic mutations (SNVs,InDels) pr. sample:
+Somatic SNVs/Indels of TCGA samples in four cohorts (colon, rectal, endometrial and stomach) were downloaded as annotated MAF files (build hg38) through the [GenomicDataCommons R package](https://bioconductor.github.io/GenomicDataCommons/) (`r msi_training_record$gdc_release`). We excluded noncoding calls (e.g. variants in UTR, regulatory regions (upstream/downstream), intron sequence etc.). Calls with a sequencing depth (*t_depth*) < `r msi_training_record$t_depth_min`, or with an allelic fraction (*t_alt_count* / *t_depth*) < `r msi_training_record$t_vaf_min` were excluded.
+Furthermore, we only considered samples for which at least **n = 100** variant calls satisfied the AF/DP criteria (selected on the basis of a threshold sensitivity analysis; see below). The list below shows the number of samples analyzed per tumor type, in addition to the median number of somatic mutations (SNVs, InDels) per sample:
 
 ```{r sample_stats}
 #| echo: true
 #| include: false
 
 snv_stats <- as.data.frame(
-  msi_model$sample_calls |> 
-    dplyr::filter(Variant_Type == 'SNP') |> 
-    dplyr::group_by(tumor,tumor_sample_barcode) |> 
-    dplyr::summarise(n_sample = dplyr::n(), 
+  msi_training_record$sample_calls |>
+    dplyr::filter(Variant_Type == 'SNP') |>
+    dplyr::group_by(tumor,tumor_sample_barcode) |>
+    dplyr::summarise(n_sample = dplyr::n(),
                      .groups = "drop") |>
     dplyr::ungroup() |>
-    dplyr::group_by(tumor) |> 
+    dplyr::group_by(tumor) |>
     dplyr::summarise(median = median(n_sample),
                      .groups = "drop"))
 indel_stats <- as.data.frame(
-  msi_model$sample_calls |> 
-    dplyr::filter(Variant_Type != 'SNP') |> 
-    dplyr::group_by(tumor,tumor_sample_barcode) |> 
+  msi_training_record$sample_calls |>
+    dplyr::filter(Variant_Type != 'SNP') |>
+    dplyr::group_by(tumor,tumor_sample_barcode) |>
     dplyr::summarise(n_sample = dplyr::n(),
-                  .groups = "drop") |> 
+                  .groups = "drop") |>
     dplyr::ungroup() |>
-    dplyr::group_by(tumor) |> 
+    dplyr::group_by(tumor) |>
     dplyr::summarise(median = median(n_sample),
                      .groups = "drop"))
 
 ```
 
-1. Colon Adenocarcinoma (COAD): `r msi_model$n_COAD` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'COAD',]$median`,`r indel_stats[indel_stats$tumor == 'COAD',]$median`
-2. Rectum Adenocarcinoma (READ): `r msi_model$n_READ` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'READ',]$median`,`r indel_stats[indel_stats$tumor == 'READ',]$median`
-3. Stomach Adenocarcinoma (STAD): `r msi_model$n_STAD` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'STAD',]$median`,`r indel_stats[indel_stats$tumor == 'STAD',]$median`
-4. Uterine Corpus Endometrial Adenocarcinoma (UCEC): `r msi_model$n_UCEC` samples, median number of mutations (SNVs,InDels) pr. sample - `r snv_stats[snv_stats$tumor == 'UCEC',]$median`,`r indel_stats[indel_stats$tumor == 'UCEC',]$median`
+1. Colon Adenocarcinoma (COAD): `r msi_training_record$n_COAD` samples, median number of mutations (SNVs, InDels) per sample — `r snv_stats[snv_stats$tumor == 'COAD',]$median`, `r indel_stats[indel_stats$tumor == 'COAD',]$median`
+2. Rectum Adenocarcinoma (READ): `r msi_training_record$n_READ` samples, median number of mutations (SNVs, InDels) per sample — `r snv_stats[snv_stats$tumor == 'READ',]$median`, `r indel_stats[indel_stats$tumor == 'READ',]$median`
+3. Stomach Adenocarcinoma (STAD): `r msi_training_record$n_STAD` samples, median number of mutations (SNVs, InDels) per sample — `r snv_stats[snv_stats$tumor == 'STAD',]$median`, `r indel_stats[indel_stats$tumor == 'STAD',]$median`
+4. Uterine Corpus Endometrial Adenocarcinoma (UCEC): `r msi_training_record$n_UCEC` samples, median number of mutations (SNVs, InDels) per sample — `r snv_stats[snv_stats$tumor == 'UCEC',]$median`, `r indel_stats[indel_stats$tumor == 'UCEC',]$median`
 
 ### Sequence repeat data
 Two tracks containing the locations of repetitive DNA were downloaded from UCSC (build hg38):
@@ -131,27 +132,56 @@ We implemented all statistical modeling and exploratory analysis in R, in partic
 
 ## Results
 
-We set out to develop a statistical classifier that distinguishes tumors with microsatellite instability from their stable counterparts. Our goal was to perform the classification using data available only within the somatic mutation profile. The training dataset included n = `r msi_model$n_training` exome-sequenced tumor samples from four different tumor types (TCGA), making up 70% of the total dataset (leaving 30% (n = `r msi_model$n_test`) for the test set). All of these `r msi_model$n_total` samples had already been assayed for MSI status using a mononucleotide marker assay (71 samples in COAD/READ/STAD/UCEC did not have an MSI status, resulting in a slightly reduced total number as to the ones presented above for mutation calls). Based on observations in previous studies [@Huang2015-bv; @Cortes-Ciriano2017-vl] and explorations of the mutation and repeats data, we defined the following quantities per sample as features for MSI classification:
+### Threshold sensitivity analysis
 
-* tumor mutational burden (rate of SNVs, InDels, SNVs + InDels in a defined coding target region size (mb), for TCGA we used 34Mb)
+Before finalising the training set, we evaluated classifier performance across a range of minimum mutation-count thresholds (n = 30, 50, 75, 100, 125, 150) to select a scientifically grounded cutoff. For each threshold, a random forest was trained on 70% of the passing samples and evaluated on the held-out 30%, with Cohen's Kappa as the primary metric.
+
+```{r threshold_sensitivity}
+#| echo: false
+
+knitr::kable(
+  msi_training_record$threshold_sensitivity,
+  digits = 4,
+  col.names = c("Min. variants", "N samples", "N training",
+                "N test", "Accuracy", "Kappa"),
+  caption = "Classifier performance by minimum mutation-count threshold."
+)
+```
+
+The n ≥ 100 threshold yielded the best Kappa and was selected for the final model. Performance at n ≥ 125 was comparable but reduced the training set substantially, while n ≥ 150 showed a drop likely attributable to reduced sample size.
+
+### Allelic fraction distribution check
+
+Prior to AF filtering, we examined whether low-allelic-fraction calls were disproportionately enriched among repeat-region indels — a pattern that would inflate MSI-H features (fracRepeatIndels, fracIndels) through artefactual signal. The table below summarises the AF distribution by variant class before the AF ≥ `r msi_training_record$t_vaf_min` filter was applied.
+
+```{r af_dist}
+#| echo: false
+
+knitr::kable(
+  msi_training_record$af_dist_results$summary,
+  digits = 3,
+  col.names = c("Variant class", "N", "Median AF", "Mean AF", "SD AF",
+                "5th pct", "25th pct", "75th pct",
+                "Frac < 0.10", "Frac < 0.15"),
+  caption = "AF distribution by variant class (depth filter only, before AF filter)."
+)
+```
+
+Repeat-region indels showed the lowest fraction of sub-0.10 AF calls of any class, indicating that the current AF floor does not disproportionately admit artefactual repeat indels. KS test results: SNV vs repeat indels D = `r round(msi_training_record$af_dist_results$ks_repeat$statistic, 4)` (p = `r format(msi_training_record$af_dist_results$ks_repeat$p.value, digits = 3)`); SNV vs non-repeat indels D = `r round(msi_training_record$af_dist_results$ks_nonrepeat$statistic, 4)` (p = `r format(msi_training_record$af_dist_results$ks_nonrepeat$p.value, digits = 3)`).
+
+### Feature exploration
+
+We set out to develop a statistical classifier that distinguishes tumors with microsatellite instability from their stable counterparts. Our goal was to perform the classification using data available only within the somatic mutation profile. The training dataset included n = `r msi_training_record$n_training` exome-sequenced tumor samples from four different tumor types (TCGA), making up 70% of the total dataset (leaving 30% (n = `r msi_training_record$n_test`) for the test set). All of these `r msi_training_record$n_total` samples had already been assayed for MSI status using a mononucleotide marker assay. Based on observations in previous studies [@Huang2015-bv; @Cortes-Ciriano2017-vl] and explorations of the mutation and repeats data, we defined the following quantities per sample as features for MSI classification:
+
+* tumor mutational burden (rate of SNVs, InDels, SNVs + InDels in a defined coding target region size (Mb), for TCGA we used 34 Mb)
 * fraction of indels (among indels + SNVs) in chromosomal regions annotated as repeats by simpleRepeats
 * fraction of indels (among indels + SNVs) in chromosomal regions annotated as repeats by windowMasker + sDust
 * fraction of indels (among indels + SNVs) in non-repetitive chromosomal regions
 * fraction of indels (among indels + SNVs)
 * fraction of SNVs (among indels + SNVs) in regions annotated as repeats by windowMasker + sDust
-* Coding mutation in POLD1
-* Coding mutation in POLE
-* Coding mutation in MSH2
-* Coding mutation in MSH3
-* Coding mutation in MSH6
-* Coding mutation in MLH1
-* Coding mutation in MLH3
-* Coding mutation in PMS1
-* Coding mutation in PMS2
+* Coding mutation in POLD1, POLE, MSH2, MSH3, MSH6, MLH1, MLH3, PMS1, PMS2
 
-<!--We deliberately designed the features to be independent of sequencing approach (e.g. _exome_, which was used in the training data from TCGA). In this manner, the classifier could be applied also in non-exome settings, such as whole-genome or targeted panels (note however that we have not been able to test the classifier in other scenarios). --> 
-
-Next, we explored the suggested predictive features defined above for _MSS_ and _MSI.H_ samples within the training dataset. Figures 1,2 and 3 indicate the discriminatory potential of some key features, particularly the indel fraction (both within and outside of repetitive DNA regions). 
+Next, we explored the suggested predictive features for _MSS_ and _MSI.H_ samples within the training dataset. Figures 1, 2 and 3 indicate the discriminatory potential of some key features, particularly the indel fraction (both within and outside of repetitive DNA regions).
 <br><br>
 
 #### Figure 1: Enrichment/depletion of mutated samples - coding MMR and POL mutations
@@ -161,9 +191,9 @@ Next, we explored the suggested predictive features defined above for _MSS_ and 
 #| echo: false
 
 ggpubr::ggarrange(
-  msi_model$plots$gene_enrichment[[1]],
-  msi_model$plots$gene_enrichment[[2]],
-  msi_model$plots$gene_enrichment[[3]],
+  msi_training_record$plots$gene_enrichment[[1]],
+  msi_training_record$plots$gene_enrichment[[2]],
+  msi_training_record$plots$gene_enrichment[[3]],
   ncol = 3, nrow = 1)
 ```
 
@@ -173,9 +203,9 @@ ggpubr::ggarrange(
 #| fig-height: 4
 
 ggpubr::ggarrange(
-  msi_model$plots$gene_enrichment[[4]],
-  msi_model$plots$gene_enrichment[[5]],
-  msi_model$plots$gene_enrichment[[6]],
+  msi_training_record$plots$gene_enrichment[[4]],
+  msi_training_record$plots$gene_enrichment[[5]],
+  msi_training_record$plots$gene_enrichment[[6]],
   ncol = 3, nrow = 1)
 ```
 
@@ -185,9 +215,9 @@ ggpubr::ggarrange(
 #| fig-height: 4
 
 ggpubr::ggarrange(
-  msi_model$plots$gene_enrichment[[7]],
-  msi_model$plots$gene_enrichment[[8]],
-  msi_model$plots$gene_enrichment[[9]],
+  msi_training_record$plots$gene_enrichment[[7]],
+  msi_training_record$plots$gene_enrichment[[8]],
+  msi_training_record$plots$gene_enrichment[[9]],
   ncol = 3, nrow = 1)
 ```
 
@@ -200,7 +230,7 @@ ggpubr::ggarrange(
 #| fig-width: 14
 #| fig-height: 10
 
-msi_model$plots$indelFracPlot
+msi_training_record$plots$indelFracPlot
 ```
 
 #### Figure 3: TCGA InDel fraction in repetitive DNA (windowMasker + sDust)
@@ -210,10 +240,12 @@ msi_model$plots$indelFracPlot
 #| fig-width: 14
 #| fig-height: 6
 
-msi_model$plots$indelWinMaskPlot
+msi_training_record$plots$indelWinMaskPlot
 ```
 
-Finally, we used the Random Forest algorithm of the caret package to train an MSI classifier. Specifically, predictive features were subject to preprocessing (scaling and transformation (YeoJohnson)), and ten-fold cross-validation was applied (see R command below):
+### Model training and performance
+
+We used the Random Forest algorithm of the caret package to train the MSI classifier. Predictive features were subject to preprocessing (scaling and YeoJohnson transformation), and ten-fold cross-validation was applied:
 
 ```{r code_example}
 #| eval: false
@@ -223,8 +255,7 @@ preProcess=c("YeoJohnson","scale"),trControl = caret::trainControl(method = "cv"
 na.action = na.exclude)
 ```
 
-The table below indicates the relative importance (scale from 0 to 100) of the variables used for prediction (i.e. using the [varImp()](https://topepo.github.io/caret/variable-importance.html) method) in the resulting model:
-
+The table below indicates the relative importance (scale from 0 to 100) of the variables in the resulting model:
 
  _Feature_ | _Importance_
  --- | ---
@@ -245,17 +276,66 @@ The table below indicates the relative importance (scale from 0 to 100) of the v
  `r var_imp[15,"feature"]`    |       **`r var_imp[15,"importance"]`**
  `r var_imp[16,"feature"]`    |       **`r var_imp[16,"importance"]`**
  `r var_imp[17,"feature"]`    |       **`r var_imp[17,"importance"]`**
- 
+
 <br><br>
 
-We applied the resulting MSI classification model to the test set of 435 tumor samples (comprising _MSI.H_ and _MSS_ samples from colon, rectum, stomach, and endometrium), and obtained the following performance:
+Applied to the held-out test set of n = `r msi_training_record$n_test` samples, the classifier obtained the following performance:
 
-* Sensitivity: **`r round(msi_model$confusion_matrix$byClass[1], digits = 3)`**
-* Specificity: **`r round(msi_model$confusion_matrix$byClass[2], digits = 3)`**
+* Sensitivity: **`r round(msi_training_record$confusion_matrix$byClass[1], digits = 3)`**
+* Specificity: **`r round(msi_training_record$confusion_matrix$byClass[2], digits = 3)`**
+
+### Prediction probability calibration
+
+The random forest outputs a class probability P(MSI-H) alongside the binary prediction. To verify that this probability is well-calibrated (i.e. usable as a confidence signal in PCGR), we compared the mean predicted P(MSI-H) against the observed MSI-H rate within decile bins on the held-out test set.
+
+**Brier score: `r round(msi_training_record$brier_score, 4)`** (0 = perfect calibration, 0.25 = uninformative).
+
+```{r calibration}
+#| echo: false
+
+knitr::kable(
+  msi_training_record$calibration_summary,
+  digits = 3,
+  col.names = c("Predicted P(MSI-H) bin", "N samples",
+                "Mean predicted prob.", "Observed MSI-H rate"),
+  caption = paste0(
+    "RF calibration on test set (Brier score = ",
+    round(msi_training_record$brier_score, 4), "). ",
+    "Well-calibrated probabilities track the diagonal.")
+)
+```
+
+The vast majority of samples fall in the extreme bins (P < 0.1 or P > 0.9), confirming that the classifier is strongly decisive. Samples scoring between 0.1 and 0.9 are flagged as uncertain in the PCGR report.
+
+### Feature variance by mutation count
+
+To quantify how reliably key MSI features can be estimated as a function of sample mutation count, we computed the median and standard deviation of each feature across mutation-count bins spanning all gold-standard samples (including those below the training threshold). This table is shipped with the runtime data and used by PCGR to annotate predictions from low-mutation samples with an expected feature uncertainty.
+
+```{r feature_variance}
+#| echo: false
+
+## Select the most interpretable columns for display
+fvt <- msi_training_record$feature_variance_table |>
+  dplyr::select(
+    mut_bin, n_samples,
+    fracIndels__median, fracIndels__sd,
+    fracRepeatIndels__median, fracRepeatIndels__sd,
+    tmb_indel__median, tmb_indel__sd
+  )
+
+knitr::kable(
+  fvt,
+  digits = 4,
+  col.names = c("Mutation bin", "N samples",
+                "fracIndels median", "fracIndels SD",
+                "fracRepeatIndels median", "fracRepeatIndels SD",
+                "TMB indel median", "TMB indel SD"),
+  caption = "Expected feature stability by mutation count bin (all gold-standard samples)."
+)
+```
 
 <br><br>
 
 ## Author contributions {.appendix}
 
 SN: Collected data from TCGA, built the MSI classifier, wrote up the report.
-

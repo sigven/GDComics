@@ -946,6 +946,9 @@ get_er_pr_her2_status <- function(
 #'
 #' @param cna_tsv_fname character, path to GDC CNA TSV file
 #' @param gencode_xref data frame, gene cross-reference data frame
+#' @param sample_ploidy numeric, sample ploidy (length-weighted mean total
+#' copy number of the ASCAT3 segments, see get_ascat3_sample_ploidy()). If NA,
+#' the most frequent gene copy number is used as a fallback
 #' @param ignore_neutral logical, whether to ignore neutral calls
 #'
 #' @export
@@ -953,16 +956,18 @@ get_er_pr_her2_status <- function(
 get_gene_cna_calls <- function(
     cna_tsv_fname = NULL,
     gencode_xref = NULL,
+    sample_ploidy = NA,
     ignore_neutral_unknown = TRUE,
     protein_coding_only = TRUE){
 
-  # Determine gene copy number state based on ASCAT3 copy number estimates
+  # Determine gene copy number state based on ASCAT3 copy number estimates,
+  # relative to the baseline copy number (sample ploidy rounded to nearest integer)
   #
   # Homozygous deletion: copy number = 0
-  # Loss: copy number > 0, but < sample ploidy
-  # Neutral: copy number = sample ploidy
-  # Gain: copy number > sample ploidy, but < 2 × sample ploidy
-  # Amplification: copy number ≥ 2 × sample ploidy
+  # Loss: copy number > 0, but < baseline
+  # Neutral: copy number = baseline
+  # Gain: copy number > baseline, but < 2 × baseline
+  # Amplification: copy number ≥ 2 × baseline
 
   cna_calls <- data.frame()
   if(file.exists(cna_tsv_fname)){
@@ -972,10 +977,14 @@ get_gene_cna_calls <- function(
       show_col_types = FALSE
     )
 
-    ## Use mode of copy number as sample ploidy
-    sample_ploidy <- as.numeric(
-      names(which.max(table(
-        cna_df$copy_number, useNA = "no"))))
+    ## Fallback (no segment-based ploidy): mode of gene copy number
+    if(is.na(sample_ploidy)){
+      sample_ploidy <- as.numeric(
+        names(which.max(table(
+          cna_df$copy_number, useNA = "no"))))
+    }
+    ## ASCAT copy numbers are integers, ploidy is not
+    baseline_cn <- max(1, round(sample_ploidy))
 
     cna_calls <- cna_df |>
       dplyr::mutate(
@@ -984,11 +993,11 @@ get_gene_cna_calls <- function(
       dplyr::mutate(
         mut_status = dplyr::case_when(
           copy_number == 0 ~ "HOMDEL",
-          copy_number > 0 & copy_number < sample_ploidy ~ "HEMDEL",
-          copy_number == sample_ploidy ~ "NEUTRAL",
-          copy_number > sample_ploidy &
-            copy_number < (2 * sample_ploidy) ~ "GAIN",
-          copy_number >= (2 * sample_ploidy) ~ "AMPL",
+          copy_number > 0 & copy_number < baseline_cn ~ "HEMDEL",
+          copy_number == baseline_cn ~ "NEUTRAL",
+          copy_number > baseline_cn &
+            copy_number < (2 * baseline_cn) ~ "GAIN",
+          copy_number >= (2 * baseline_cn) ~ "AMPL",
           TRUE ~ "UNKNOWN"
         )
       ) |>

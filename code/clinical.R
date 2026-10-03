@@ -529,7 +529,7 @@
 #' @return A data.frame with clinical info for all tumor samples in TCGA
 #' @export
 #'
-gdc_clinical <- function(
+gdc_tcga_clinical <- function(
     output_dir = NA,
     gdc_release = "release45_20251204",
     gdc_projects = NULL,
@@ -568,7 +568,7 @@ gdc_clinical <- function(
         "samples.sample_type",
         "samples.tissue_type",
         "demographic.age_at_index",
-        "demographic.gender",
+        "demographic.sex_at_birth",
         "demographic.race",
         "demographic.year_of_birth",
         "demographic.ethnicity",
@@ -588,7 +588,6 @@ gdc_clinical <- function(
         "diagnoses.primary_diagnosis",
         "diagnoses.tissue_or_organ_of_origin",
         "diagnoses.icd_10_code",
-        "diagnoses.primary_disease",
         "diagnoses.site_of_resection_or_biopsy",
         "diagnoses.age_at_diagnosis",
         "diagnoses.tumor_grade",
@@ -661,7 +660,7 @@ gdc_clinical <- function(
 
 
   tcga_case_info[['msi']] <-
-    gdc_msi(
+    gdc_tcga_msi(
       output_dir = output_dir,
       data_raw_dir = data_raw_dir,
       gdc_release = "release45_20251204",
@@ -717,7 +716,7 @@ gdc_clinical <- function(
         "tissue_type",
         "race",
         "ethnicity",
-        "gender",
+        "sex_at_birth",
         "population_group",
         "vital_status",
         "age_at_diagnosis",
@@ -994,48 +993,6 @@ clean_site_diagnosis <- function(
       TRUE ~ as.character(primary_site)
     ))
 
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "LUAD",
-    #   "Lung",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "OV",
-    #   "Ovary/Fallopian Tube",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "GBM",
-    #   "CNS/Brain",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "UCEC",
-    #   "Uterus",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "BRCA",
-    #   "Breast",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "CHOL",
-    #   "Biliary Tract",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "TGCT",
-    #   "Testis",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) &
-    #     (tumor == "COAD" | tumor == "READ"),
-    #   "Colon/Rectum",
-    #   as.character(primary_site)
-    # ))
-
   tcga_clinical_counts <- as.data.frame(
     clinical_df_cleaned |>
       dplyr::group_by(
@@ -1130,18 +1087,20 @@ clean_site_diagnosis <- function(
     dplyr::distinct()
 
   tcga_clinical_complete <- clinical_df_cleaned |>
-    #dplyr::select(
-    #clinical_df_cleaned, -primary_site) |>
     dplyr::left_join(
       dplyr::select(
         tcga_clinical_counts, tumor,
         primary_diagnosis, primary_site,
         primary_diagnosis_simplified,
         primary_diagnosis_very_simplified),
-      by = c("tumor","primary_diagnosis","primary_site"),
+      by = c("tumor",
+             "primary_diagnosis",
+             "primary_site"),
       relationship = "many-to-many") |>
-    dplyr::filter(tumor != 'PCPG' |
-                    (tumor == 'PCPG' & primary_site != 'Other/Unknown')) |>
+    dplyr::filter(
+      tumor != 'PCPG' |
+        (tumor == 'PCPG' &
+           primary_site != 'Other/Unknown')) |>
     dplyr::left_join(
       tissue_subtype_codes,
       by = c("primary_site",
@@ -1151,48 +1110,14 @@ clean_site_diagnosis <- function(
     dplyr::rename(icd10_code = icd_10_code) |>
     dplyr::mutate(tumor_stage = ajcc_pathologic_stage) |>
     dplyr::mutate(tumor_stage_TNM = paste0(
-      ajcc_pathologic_t,"__",ajcc_pathologic_n,"__",ajcc_pathologic_m))
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "LUAD",
-    #   "Lung",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "OV",
-    #   "Ovary/Fallopian Tube",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "GBM",
-    #   "CNS/Brain",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "UCEC",
-    #   "Uterus",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "BRCA",
-    #   "Breast",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "CHOL",
-    #   "Biliary Tract",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) & tumor == "TGCT",
-    #   "Testis",
-    #   as.character(primary_site)
-    # )) |>
-    # dplyr::mutate(primary_site = dplyr::if_else(
-    #   is.na(primary_site) &
-    #     (tumor == "COAD" | tumor == "READ"),
-    #   "Colon/Rectum",
-    #   as.character(primary_site)
-    # ))
+      ajcc_pathologic_t,"__",
+      ajcc_pathologic_n,"__",
+      ajcc_pathologic_m)) |>
+    dplyr::mutate(tumor_stage_TNM = dplyr::if_else(
+      tumor_stage_TNM == "NA__NA__NA",
+      as.character(NA),
+      as.character(tumor_stage_TNM)
+    ))
 
   return(tcga_clinical_complete)
 

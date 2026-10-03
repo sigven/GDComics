@@ -11,9 +11,9 @@
 #' @return Data frame with MSI data
 #'
 #' @export
-gdc_msi <- function(
+gdc_tcga_msi <- function(
   output_dir = NULL,
-  gdc_release = "release45_20251204",
+  gdc_release = "release46_20260810",
   data_raw_dir = NULL,
   overwrite = F){
 
@@ -519,7 +519,7 @@ get_msi_prediction_features <- function(varcalls, target_size_mb = 34.0){
 }
 
 generate_msi_classifier <- function(
-    msi_report_template_rmarkdown = NA,
+    msi_report_template_qmd = NA,
     t_depth_min = 30,
     t_vaf_min = 0.05,
     gdc_release = NA,
@@ -529,15 +529,15 @@ generate_msi_classifier <- function(
 
   if(!dir.exists(
     file.path(
-      output_dir, tcga_release, "msi"))){
+      output_dir, gdc_release, "msi"))){
     dir.create(
-      file.path(output_dir, tcga_release, "msi"))
+      file.path(output_dir, gdc_release, "msi"))
   }
 
-  msi_classifier_fname = file.path(
-    output_dir, tcga_release, "msi", "tcga_msi_classifier2.rds")
+  msi_runtime_data_fname = file.path(
+    output_dir, gdc_release, "msi", "tcga_msi_runtime_data.rds")
 
-  if(file.exists(msi_classifier_fname) & overwrite == F){
+  if(file.exists(msi_runtime_data_fname) & overwrite == F){
     return(0)
   }
 
@@ -592,19 +592,16 @@ generate_msi_classifier <- function(
     quiet = T
   )
 
-  ## 1. Filter calls based on DP and VAF
-  ## - t_depth_min: minimum tumor depth
-  ## - t_vaf_min: minimum tumor variant allelic fraction
+  ## 1. Apply depth filter only — AF filter is intentionally withheld here so
+  ##    the AF distribution check below can see the full shape of the AF
+  ##    spectrum, including the low-AF region where artefacts accumulate.
   ## 2. Only keep samples for which we have gold standard MSI data
-  ## 3. Limit samples to those with a minimum of n = 50 SNV/indel
-  ##    calls after DP/AF filtering
-  snv_indel_calls_filtered <- snv_indel_calls |>
+  snv_indel_calls_dp_filtered <- snv_indel_calls |>
     dplyr::mutate(
       t_vaf = as.numeric(t_alt_count) / as.numeric(t_depth)
     ) |>
     dplyr::filter(
-      as.numeric(t_depth) >= t_depth_min &
-        as.numeric(t_vaf) >= t_vaf_min
+      as.numeric(t_depth) >= t_depth_min
     ) |>
     dplyr::inner_join(
       dplyr::select(
@@ -612,6 +609,87 @@ generate_msi_classifier <- function(
         tumor_sample_barcode
       ), by = "tumor_sample_barcode"
     )
+
+  ## Check AF distribution of SNVs vs indels (all, repeat-region indels, and
+  ## non-repeat indels) BEFORE AF filtering, to detect artefact enrichment
+  ## near the AF floor. Repeat-region indels piling up at low AF are a specific
+  ## concern as they directly inflate MSI-H features (fracRepeatIndels, fracIndels).
+  af_dist_check <- snv_indel_calls_dp_filtered |>
+    dplyr::mutate(
+      repeatStatus = dplyr::if_else(
+        SIMPLEREPEATS_HIT == TRUE |
+          WINMASKER_HIT == TRUE,
+        "repeat",
+        "nonrepeat"
+      )
+    ) |>
+    dplyr::mutate(
+      var_class = dplyr::case_when(
+        Variant_Type == "SNP"   ~ "SNV",
+        Variant_Type == "INS" & repeatStatus == "repeat" ~ "Indel_repeat",
+        Variant_Type == "DEL" &  repeatStatus == "nonrepeat" ~ "Indel_nonrepeat",
+        TRUE ~ NA_character_
+      )
+    ) |>
+    dplyr::filter(!is.na(var_class))
+
+  af_dist_summary <- af_dist_check |>
+    dplyr::group_by(var_class) |>
+    dplyr::summarise(
+      n            = dplyr::n(),
+      af_median    = median(t_vaf, na.rm = TRUE),
+      af_mean      = mean(t_vaf,   na.rm = TRUE),
+      af_sd        = sd(t_vaf,     na.rm = TRUE),
+      af_p05       = quantile(t_vaf, 0.05, na.rm = TRUE),
+      af_p25       = quantile(t_vaf, 0.25, na.rm = TRUE),
+      af_p75       = quantile(t_vaf, 0.75, na.rm = TRUE),
+      frac_below_0.10 = mean(t_vaf < 0.10, na.rm = TRUE),
+      frac_below_0.15 = mean(t_vaf < 0.15, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  lgr::lgr$info("AF distribution by variant class (post-filter):")
+  for (i in seq_len(nrow(af_dist_summary))) {
+    r <- af_dist_summary[i, ]
+    lgr::lgr$info(
+      paste0("  ", r$var_class,
+             ": n=", r$n,
+             ", median_AF=", round(r$af_median, 3),
+             ", mean_AF=", round(r$af_mean, 3),
+             ", frac<0.10=", round(r$frac_below_0.10, 3),
+             ", frac<0.15=", round(r$frac_below_0.15, 3))
+    )
+  }
+
+  ## KS test: are indel AF distributions significantly different from SNVs?
+  af_snv         <- dplyr::filter(af_dist_check, var_class == "SNV")$t_vaf
+  af_ind_rep     <- dplyr::filter(af_dist_check, var_class == "Indel_repeat")$t_vaf
+  af_ind_nonrep  <- dplyr::filter(af_dist_check, var_class == "Indel_nonrepeat")$t_vaf
+
+  ks_repeat    <- ks.test(af_snv, af_ind_rep)
+  ks_nonrepeat <- ks.test(af_snv, af_ind_nonrep)
+
+  lgr::lgr$info(
+    paste0("KS test SNV vs repeat indels:    D=",
+           round(ks_repeat$statistic, 4),
+           ", p=", format(ks_repeat$p.value, digits = 3))
+  )
+  lgr::lgr$info(
+    paste0("KS test SNV vs non-repeat indels: D=",
+           round(ks_nonrepeat$statistic, 4),
+           ", p=", format(ks_nonrepeat$p.value, digits = 3))
+  )
+
+  af_dist_results <- list(
+    summary      = af_dist_summary,
+    ks_repeat    = ks_repeat,
+    ks_nonrepeat = ks_nonrepeat
+  )
+
+  ## Now apply the AF filter to produce the final filtered callset used for
+  ## all downstream model training and evaluation.
+  snv_indel_calls_filtered <- snv_indel_calls_dp_filtered |>
+    dplyr::filter(t_vaf >= t_vaf_min)
 
   sample_call_counts <- as.data.frame(
     dplyr::group_by(
@@ -623,11 +701,210 @@ generate_msi_classifier <- function(
       )
   )
 
+  ## Evaluate classifier performance across multiple minimum-mutation thresholds
+  ## to inform a scientifically grounded choice for the final model.
+  min_mut_thresholds <- c(30, 50, 75, 100, 125, 150)
+  threshold_performance <- list()
+
+  for (min_mut in min_mut_thresholds) {
+
+    calls_thresh <- snv_indel_calls_filtered |>
+      dplyr::inner_join(
+        dplyr::filter(sample_call_counts, n_calls >= min_mut) |>
+          dplyr::select(tumor_sample_barcode),
+        by = "tumor_sample_barcode"
+      )
+
+    gs_thresh <- msi_data_goldstandard |>
+      dplyr::filter(
+        tumor_sample_barcode %in% unique(calls_thresh$tumor_sample_barcode)
+      )
+
+    msi_data_thresh <- get_msi_prediction_features(varcalls = calls_thresh)
+
+    features_response_thresh <- msi_data_thresh$msi_features |>
+      dplyr::inner_join(
+        gs_thresh,
+        by = c("bcr_patient_barcode", "tumor_sample_barcode")
+      )
+
+    dataset_thresh <- dplyr::select(
+      features_response_thresh,
+      tumor, msi_status,
+      fracWinMaskIndels, fracWinMaskSNVs,
+      fracRepeatIndels, fracIndels, fracNonRepeatIndels,
+      tmb, tmb_snv, tmb_indel,
+      MLH1, MSH2, MLH3, MSH3, MSH6,
+      PMS1, PMS2, POLE, POLD1
+    )
+
+    set.seed(9999)
+    inTrain_thresh <- caret::createDataPartition(
+      dataset_thresh$msi_status, p = 0.70)[[1]]
+    training_thresh <- dplyr::select(dataset_thresh[ inTrain_thresh,], -tumor)
+    testing_thresh  <- dataset_thresh[-inTrain_thresh,]
+
+    modfit_thresh <- caret::train(
+      as.factor(msi_status) ~ .,
+      method = "rf",
+      data = training_thresh,
+      preProcess = c("YeoJohnson", "scale"),
+      trControl = caret::trainControl(method = "cv", number = 10),
+      na.action = na.exclude
+    )
+
+    cm_thresh <- caret::confusionMatrix(
+      predict(modfit_thresh, dplyr::select(testing_thresh, -msi_status)),
+      as.factor(testing_thresh$msi_status)
+    )
+
+    threshold_performance[[as.character(min_mut)]] <- list(
+      min_mut         = min_mut,
+      n_samples       = nrow(dataset_thresh),
+      n_training      = nrow(training_thresh),
+      n_test          = nrow(testing_thresh),
+      accuracy        = cm_thresh$overall[["Accuracy"]],
+      kappa           = cm_thresh$overall[["Kappa"]],
+      confusion_matrix = cm_thresh
+    )
+
+    lgr::lgr$info(
+      paste0("Threshold n >= ", min_mut,
+             ": n_samples = ", nrow(dataset_thresh),
+             ", Accuracy = ", round(cm_thresh$overall[["Accuracy"]], 4),
+             ", Kappa = ", round(cm_thresh$overall[["Kappa"]], 4))
+    )
+  }
+
+  threshold_summary <- dplyr::bind_rows(
+    lapply(threshold_performance, function(x)
+      data.frame(
+        min_mut    = x$min_mut,
+        n_samples  = x$n_samples,
+        n_training = x$n_training,
+        n_test     = x$n_test,
+        accuracy   = x$accuracy,
+        kappa      = x$kappa
+      )
+    )
+  )
+
+  ## Evaluate how prediction fidelity degrades for low-mutation samples.
+  ## Strategy: train once on high-confidence samples (n >= 100), then apply
+  ## to all excluded samples binned by mutation count. This directly answers
+  ## at what mutation count predictions become unreliable.
+  high_conf_calls <- snv_indel_calls_filtered |>
+    dplyr::inner_join(
+      dplyr::filter(sample_call_counts, n_calls >= 100) |>
+        dplyr::select(tumor_sample_barcode),
+      by = "tumor_sample_barcode"
+    )
+
+  high_conf_gs <- msi_data_goldstandard |>
+    dplyr::filter(
+      tumor_sample_barcode %in% unique(high_conf_calls$tumor_sample_barcode)
+    )
+
+  msi_data_hc <- get_msi_prediction_features(varcalls = high_conf_calls)
+
+  features_hc <- msi_data_hc$msi_features |>
+    dplyr::inner_join(high_conf_gs,
+                      by = c("bcr_patient_barcode", "tumor_sample_barcode"))
+
+  dataset_hc <- dplyr::select(
+    features_hc,
+    tumor, msi_status,
+    fracWinMaskIndels, fracWinMaskSNVs,
+    fracRepeatIndels, fracIndels, fracNonRepeatIndels,
+    tmb, tmb_snv, tmb_indel,
+    MLH1, MSH2, MLH3, MSH3, MSH6,
+    PMS1, PMS2, POLE, POLD1
+  )
+
+  set.seed(9999)
+  modfit_hc <- caret::train(
+    as.factor(msi_status) ~ .,
+    method = "rf",
+    data = dplyr::select(dataset_hc, -tumor),
+    preProcess = c("YeoJohnson", "scale"),
+    trControl = caret::trainControl(method = "cv", number = 10),
+    na.action = na.exclude
+  )
+
+  ## Samples excluded from high-confidence training set, with gold-standard labels
+  low_mut_samples <- sample_call_counts |>
+    dplyr::filter(
+      n_calls < 100,
+      tumor_sample_barcode %in% msi_data_goldstandard$tumor_sample_barcode
+    ) |>
+    dplyr::mutate(
+      mut_bin = cut(
+        n_calls,
+        breaks = c(0, 10, 20, 30, 50, 75, 99),
+        labels = c("<10", "10-19", "20-29", "30-49", "50-74", "75-99"),
+        right = TRUE
+      )
+    )
+
+  low_mut_calls <- snv_indel_calls_filtered |>
+    dplyr::inner_join(
+      dplyr::select(low_mut_samples, tumor_sample_barcode),
+      by = "tumor_sample_barcode"
+    )
+
+  low_mut_gs <- msi_data_goldstandard |>
+    dplyr::filter(
+      tumor_sample_barcode %in% unique(low_mut_calls$tumor_sample_barcode)
+    )
+
+  msi_data_lm <- get_msi_prediction_features(varcalls = low_mut_calls)
+
+  features_lm <- msi_data_lm$msi_features |>
+    dplyr::inner_join(low_mut_gs,
+                      by = c("bcr_patient_barcode", "tumor_sample_barcode")) |>
+    dplyr::inner_join(
+      dplyr::select(low_mut_samples, tumor_sample_barcode, n_calls, mut_bin),
+      by = "tumor_sample_barcode"
+    )
+
+  pred_lm <- predict(
+    modfit_hc,
+    dplyr::select(features_lm,
+                  fracWinMaskIndels, fracWinMaskSNVs,
+                  fracRepeatIndels, fracIndels, fracNonRepeatIndels,
+                  tmb, tmb_snv, tmb_indel,
+                  MLH1, MSH2, MLH3, MSH3, MSH6,
+                  PMS1, PMS2, POLE, POLD1)
+  )
+
+  low_mut_eval <- features_lm |>
+    dplyr::select(tumor_sample_barcode, msi_status, n_calls, mut_bin) |>
+    dplyr::mutate(predicted = as.character(pred_lm))
+
+  low_mut_bin_performance <- low_mut_eval |>
+    dplyr::group_by(mut_bin) |>
+    dplyr::summarise(
+      n_samples = dplyr::n(),
+      accuracy  = mean(predicted == msi_status),
+      n_correct = sum(predicted == msi_status),
+      .groups = "drop"
+    )
+
+  for (i in seq_len(nrow(low_mut_bin_performance))) {
+    lgr::lgr$info(
+      paste0("Low-mutation bin ", low_mut_bin_performance$mut_bin[i],
+             ": n = ", low_mut_bin_performance$n_samples[i],
+             ", Accuracy = ", round(low_mut_bin_performance$accuracy[i], 4))
+    )
+  }
+
+  ## Use n >= 100 as the threshold for the final saved model, selected on the
+  ## basis of the threshold sensitivity sweep above (best Kappa at n >= 100).
   snv_indel_calls_filtered <- snv_indel_calls_filtered |>
     dplyr::inner_join(
       dplyr::filter(
         sample_call_counts,
-        n_calls >= 50) |>
+        n_calls >= 100) |>
         dplyr::select(tumor_sample_barcode),
       by = "tumor_sample_barcode"
     )
@@ -712,60 +989,210 @@ generate_msi_classifier <- function(
       method = "cv", number = 10),
     na.action = na.exclude)
 
-  msi_model <- list()
-  msi_model$fitted_model <- modfit_rf
-  msi_model$variable_importance <- varImp(modfit_rf)
-  msi_model$confusion_matrix <- confusionMatrix(
-    predict(
-      modfit_rf, dplyr::select(testing,-msi_status)),
+  ## -------------------------------------------------------------------------
+  ## Empirical feature-variance lookup table
+  ## Computed across ALL gold-standard samples regardless of mutation count
+  ## (combining the high-confidence n>=100 set and the low-mutation <100 set)
+  ## so that PCGR can look up expected feature stability for any sample,
+  ## including those below the training threshold.
+  ## -------------------------------------------------------------------------
+  msi_feature_cols <- c(
+    "fracWinMaskIndels", "fracWinMaskSNVs",
+    "fracRepeatIndels", "fracIndels", "fracNonRepeatIndels",
+    "tmb", "tmb_snv", "tmb_indel"
+  )
+
+  all_features_for_variance <- dplyr::bind_rows(
+    dplyr::select(features_hc,
+                  tumor_sample_barcode,
+                  dplyr::all_of(msi_feature_cols)) |>
+      dplyr::inner_join(
+        dplyr::select(sample_call_counts, tumor_sample_barcode, n_calls),
+        by = "tumor_sample_barcode"
+      ),
+    dplyr::select(features_lm,
+                  tumor_sample_barcode, n_calls,
+                  dplyr::all_of(msi_feature_cols))
+  )
+
+  feature_variance_table <- all_features_for_variance |>
+    dplyr::mutate(
+      mut_bin = cut(
+        n_calls,
+        breaks = c(0, 30, 50, 75, 100, 150, 200, 500, Inf),
+        labels = c("<30", "30-49", "50-74", "75-99",
+                   "100-149", "150-199", "200-499", "500+"),
+        right = FALSE
+      )
+    ) |>
+    dplyr::group_by(mut_bin) |>
+    dplyr::summarise(
+      n_samples            = dplyr::n(),
+      dplyr::across(
+        dplyr::all_of(msi_feature_cols),
+        list(
+          median = \(x) median(x, na.rm = TRUE),
+          sd     = \(x) sd(x,     na.rm = TRUE),
+          cv     = \(x) sd(x, na.rm = TRUE) / (mean(x, na.rm = TRUE) + 1e-9)
+        ),
+        .names = "{.col}__{.fn}"
+      ),
+      .groups = "drop"
+    )
+
+  lgr::lgr$info("Feature variance lookup table (SD of fracIndels by mutation bin):")
+  for (i in seq_len(nrow(feature_variance_table))) {
+    lgr::lgr$info(
+      paste0("  mut_bin=", feature_variance_table$mut_bin[i],
+             "  n=", feature_variance_table$n_samples[i],
+             "  fracIndels_sd=",
+             round(feature_variance_table$fracIndels__sd[i], 4),
+             "  fracRepeatIndels_sd=",
+             round(feature_variance_table$fracRepeatIndels__sd[i], 4),
+             "  tmb_indel_sd=",
+             round(feature_variance_table$tmb_indel__sd[i], 4))
+    )
+  }
+
+  ## -------------------------------------------------------------------------
+  ## RF probability calibration check on the held-out test set
+  ## Bins predicted P(MSI-H) into deciles and compares observed MSI-H rate
+  ## within each bin. Well-calibrated probabilities lie on the diagonal.
+  ## Also computes Brier score as a scalar summary of calibration quality.
+  ## -------------------------------------------------------------------------
+  prob_testing <- predict(
+    modfit_rf,
+    dplyr::select(testing, -msi_status),
+    type = "prob"
+  )
+
+  calibration_df <- data.frame(
+    msi_status  = testing$msi_status,
+    prob_msi_h  = prob_testing[["MSI-H"]]
+  ) |>
+    dplyr::mutate(
+      prob_bin = cut(
+        prob_msi_h,
+        breaks = seq(0, 1, by = 0.1),
+        include.lowest = TRUE,
+        right = FALSE
+      ),
+      is_msi_h = as.integer(msi_status == "MSI-H")
+    )
+
+  calibration_summary <- calibration_df |>
+    dplyr::group_by(prob_bin) |>
+    dplyr::summarise(
+      n                 = dplyr::n(),
+      mean_pred_prob    = mean(prob_msi_h),
+      observed_msi_h_rate = mean(is_msi_h),
+      .groups = "drop"
+    )
+
+  brier_score <- mean(
+    (calibration_df$prob_msi_h - calibration_df$is_msi_h)^2
+  )
+
+  lgr::lgr$info(
+    paste0("RF calibration — Brier score on test set: ",
+           round(brier_score, 4),
+           " (0 = perfect, 0.25 = uninformative)")
+  )
+  lgr::lgr$info("Calibration by predicted probability decile:")
+  for (i in seq_len(nrow(calibration_summary))) {
+    r <- calibration_summary[i, ]
+    lgr::lgr$info(
+      paste0("  bin=", r$prob_bin,
+             "  n=", r$n,
+             "  mean_pred=", round(r$mean_pred_prob, 3),
+             "  observed_rate=", round(r$observed_msi_h_rate, 3))
+    )
+  }
+
+  ## -------------------------------------------------------------------------
+  ## msi_training_record — full development artefact, consumed by the GDComics
+  ## Quarto report (tcga_msi_training_report.html) and internal QC.
+  ## Never loaded by PCGR at runtime.
+  ## -------------------------------------------------------------------------
+  msi_training_record <- list()
+
+  ## Core model outputs
+  msi_training_record$fitted_model      <- modfit_rf
+  msi_training_record$variable_importance <- varImp(modfit_rf)
+  msi_training_record$confusion_matrix  <- confusionMatrix(
+    predict(modfit_rf, dplyr::select(testing, -msi_status)),
     as.factor(testing$msi_status))
-  msi_model$sample_features <- msi_predmodel_data
-  msi_model$sample_calls <- msi_data$calls
-  msi_model$plots <- msi_plots
-  msi_model$gdc_release <- gdc_release
-  msi_model$t_depth_min <- t_depth_min
-  msi_model$t_vaf_min <- t_vaf_min
-  msi_model$n_test <- nrow(testing)
-  msi_model$n_training <- nrow(training)
-  msi_model$n_total <- nrow(training) + nrow(testing)
-  msi_model$n_COAD <-
-    msi_pred_features_response |>
-    dplyr::filter(tumor == 'COAD') |> nrow()
-  msi_model$n_STAD <-
-    msi_pred_features_response |>
-    dplyr::filter(tumor == 'STAD') |> nrow()
-  msi_model$n_READ <-
-    msi_pred_features_response |>
-    dplyr::filter(tumor == 'READ') |> nrow()
-  msi_model$n_UCEC <-
-    msi_pred_features_response |>
-    dplyr::filter(tumor == 'UCEC') |> nrow()
 
-  msi_classifier <- list()
-  msi_classifier$model <- modfit_rf
-  msi_classifier$confMatrix <- msi_model$confusion_matrix
-  msi_classifier$training_dataset <- msi_pred_features_response
+  ## Training provenance
+  msi_training_record$gdc_release  <- gdc_release
+  msi_training_record$t_depth_min  <- t_depth_min
+  msi_training_record$t_vaf_min    <- t_vaf_min
+  msi_training_record$n_training   <- nrow(training)
+  msi_training_record$n_test       <- nrow(testing)
+  msi_training_record$n_total      <- nrow(training) + nrow(testing)
+  msi_training_record$n_COAD       <-
+    dplyr::filter(msi_pred_features_response, tumor == 'COAD') |> nrow()
+  msi_training_record$n_STAD       <-
+    dplyr::filter(msi_pred_features_response, tumor == 'STAD') |> nrow()
+  msi_training_record$n_READ       <-
+    dplyr::filter(msi_pred_features_response, tumor == 'READ') |> nrow()
+  msi_training_record$n_UCEC       <-
+    dplyr::filter(msi_pred_features_response, tumor == 'UCEC') |> nrow()
 
-  saveRDS(
-    msi_classifier,
-    file = file.path(
-      output_dir, gdc_release, "msi", "tcga_msi_classifier.rds")
+  ## Training data and exploratory plots
+  msi_training_record$sample_features <- msi_predmodel_data
+  msi_training_record$sample_calls     <- msi_data$calls
+  msi_training_record$plots            <- msi_plots
+
+  ## Diagnostic analyses
+  msi_training_record$threshold_sensitivity   <- threshold_summary
+  msi_training_record$low_mut_bin_performance <- low_mut_bin_performance
+  msi_training_record$af_dist_results         <- af_dist_results
+  msi_training_record$feature_variance_table  <- feature_variance_table
+  msi_training_record$calibration_summary     <- calibration_summary
+  msi_training_record$brier_score             <- brier_score
+
+  ## -------------------------------------------------------------------------
+  ## msi_runtime_data — lean bundle loaded by PCGR at inference time.
+  ## Contains only what is needed for prediction and report rendering.
+  ## Built from msi_training_record to avoid any divergence between the two.
+  ## -------------------------------------------------------------------------
+  msi_runtime_data <- list(
+    ## RF model — used by predict_msi_status()
+    model                  = msi_training_record$fitted_model,
+    ## Test-set performance — referenced in the PCGR report text
+    confMatrix             = msi_training_record$confusion_matrix,
+    ## TCGA fracIndels distribution — background for the report histogram
+    tcga_dataset           = msi_pred_features_response,
+    ## Per mutation-count-bin feature SD — drives the confidence note in PCGR
+    feature_variance_table = msi_training_record$feature_variance_table,
+    ## Calibration results — supports reporting of P(MSI-H)
+    calibration_summary    = msi_training_record$calibration_summary,
+    brier_score            = msi_training_record$brier_score
   )
 
   saveRDS(
-    msi_model,
+    msi_runtime_data,
+    file = msi_runtime_data_fname
+  )
+
+  saveRDS(
+    msi_training_record,
     file = file.path(
-      output_dir, gdc_release, "msi", "tcga_msi_model.rds")
+      output_dir, gdc_release,
+      "msi", "tcga_msi_training_record.rds")
   )
 
   quarto::quarto_render(
-    input = msi_report_template_rmarkdown,
+    input = msi_report_template_qmd,
     output_file =
-      "tcga_msi_classifier.html")
+      file.path(
+        output_dir, gdc_release, "msi",
+      "tcga_msi_training_report.html"))
 
-  system(paste0("mv code/tcga_msi_classifier.html ",
+  system(paste0("mv code/tcga_msi_training_report.html ",
                 file.path(
                   output_dir, gdc_release, "msi",
-                  "tcga_msi_classifier.html")))
+                  "tcga_msi_training_report.html")))
 
 }
